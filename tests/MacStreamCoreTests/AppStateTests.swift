@@ -233,6 +233,20 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
+    func testResetSunshineScreenRecordingGrantInvokesTccutil() async {
+        let runner = CapturingCommandRunner()
+        let permissions = MockPermissionManager()
+        let appState = makeTestAppState(permissions: permissions, commandRunner: runner)
+
+        await appState.resetSunshineScreenRecordingGrant()
+
+        let tccCall = runner.invocations.first { $0.executablePath == "/usr/bin/tccutil" }
+        XCTAssertNotNil(tccCall)
+        XCTAssertEqual(tccCall?.arguments, ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"])
+        XCTAssertEqual(permissions.openedSettings, [.screenRecording])
+    }
+
+    @MainActor
     func testSetAppPasswordUpdatesIsAppPasswordSet() {
         let passwordStore = InMemoryAppPasswordStore()
         let appState = makeTestAppState(appPasswordStore: passwordStore)

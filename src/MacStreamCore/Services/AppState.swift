@@ -33,6 +33,7 @@ public final class AppState: ObservableObject {
     @Published public private(set) var isAppPasswordSet: Bool = false
 
     public let appPasswordStore: AppPasswordStoring
+    public let commandRunner: CommandRunning
 
     private let agentRecoveryCooldown: TimeInterval = 60
     private let dateProvider: () -> Date
@@ -75,10 +76,12 @@ public final class AppState: ObservableObject {
         hostPrivacyManager: HostPrivacyManaging? = nil,
         remoteWorkSessionManager: RemoteWorkSessionManaging? = nil,
         appPasswordStore: AppPasswordStoring? = nil,
+        commandRunner: CommandRunning = ProcessCommandRunner(),
         dateProvider: @escaping () -> Date = Date.init
     ) {
         self.dateProvider = dateProvider
         self.appPasswordStore = appPasswordStore ?? KeychainAppPasswordStore()
+        self.commandRunner = commandRunner
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
         self.dependencyInstallerManager = dependencyInstallerManager
@@ -510,6 +513,35 @@ public final class AppState: ObservableObject {
     public func openSettings(for permission: MacPermission) async {
         await runOperation(successMessage: "Ajustes de \(permission.displayName) abertos.") {
             try await permissionManager.openSettings(for: permission)
+        }
+    }
+
+    /// Resets the macOS TCC entry for the embedded video engine (Sunshine bundle
+    /// id) so a clean grant flow can run. macOS invalidates Screen Recording
+    /// grants when the host bundle is replaced; this command clears any zombie
+    /// entry, then opens the Screen Recording pane in System Settings.
+    public func resetSunshineScreenRecordingGrant() async {
+        let result = await commandRunner.run(
+            executablePath: "/usr/bin/tccutil",
+            arguments: ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"],
+            timeout: 5
+        )
+        if result.exitCode == 0 {
+            lastOperationMessage = "Permissão do motor de vídeo resetada. Abra Ajustes do Sistema e ative o toggle para 'Sunshine'."
+        } else {
+            let detail = result.standardError.isEmpty
+                ? "tccutil retornou código \(result.exitCode)."
+                : result.standardError
+            lastOperationMessage = "Não foi possível resetar a permissão: \(detail)"
+        }
+        try? await permissionManager.openSettings(for: .screenRecording)
+    }
+
+    /// Convenience flag derived from the current health check — true when the
+    /// runtime log analysis matched the Screen Recording TCC failure pattern.
+    public var hasSunshineScreenRecordingFailure: Bool {
+        healthCheckResult.checks.contains {
+            $0.id == .sunshineScreenRecording && $0.status == .fail
         }
     }
 

@@ -94,6 +94,13 @@ struct DashboardView: View {
 
     var body: some View {
         PageContainer(title: "Remote Work", subtitle: "Prepare este Mac para uso remoto produtivo a partir do iPad ou outro cliente Moonlight.") {
+            if appState.hasSunshineScreenRecordingFailure {
+                ScreenRecordingRecoveryBanner(
+                    onReset: { Task { await appState.resetSunshineScreenRecordingGrant() } },
+                    onOpenSettings: { Task { await appState.openSettings(for: .screenRecording) } }
+                )
+            }
+
             RemoteWorkBanner(
                 report: appState.remoteWorkSession,
                 pairingAddresses: pairingAddresses,
@@ -1480,6 +1487,54 @@ private struct StepLine: View {
             }
             Spacer()
         }
+    }
+}
+
+struct ScreenRecordingRecoveryBanner: View {
+    var onReset: () -> Void
+    var onOpenSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Motor de vídeo sem permissão de Gravação de Tela")
+                        .font(.headline)
+                    Text("O macOS revoga essa permissão a cada reinstalação do app. Resete e ative o toggle novamente para destravar a sessão.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            HStack {
+                Button {
+                    onReset()
+                } label: {
+                    Label("Resetar permissão do motor de vídeo", systemImage: "arrow.counterclockwise.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+
+                Button {
+                    onOpenSettings()
+                } label: {
+                    Label("Abrir Ajustes de Gravação de Tela", systemImage: "gearshape")
+                }
+
+                Spacer()
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12).fill(.red.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(.red.opacity(0.5), lineWidth: 1)
+        )
     }
 }
 

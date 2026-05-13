@@ -1166,6 +1166,7 @@ public enum HealthCheckID: String, Codable, Hashable, CaseIterable {
     case remoteWorkMode
     case sunshine
     case sunshineRuntime
+    case sunshineScreenRecording
     case webUI
     case blackHole
     case permissions

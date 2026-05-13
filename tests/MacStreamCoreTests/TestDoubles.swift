@@ -124,6 +124,7 @@ final class MockDependencyInstallerManager: DependencyInstalling {
 final class MockPermissionManager: PermissionManaging {
     private let permissionsStatus: MacOSPermissionsStatus
     private(set) var requestedPermissions: [MacPermission] = []
+    private(set) var openedSettings: [MacPermission] = []
 
     init(
         permissionsStatus: MacOSPermissionsStatus = MacOSPermissionsStatus(checks: [
@@ -154,7 +155,9 @@ final class MockPermissionManager: PermissionManaging {
         }
     }
 
-    func openSettings(for permission: MacPermission) async throws {}
+    func openSettings(for permission: MacPermission) async throws {
+        openedSettings.append(permission)
+    }
 }
 
 final class MockAudioDeviceManager: AudioDeviceManaging {
@@ -590,7 +593,8 @@ func makeTestAppState(
     power: PowerAssertionManaging = MockPowerAssertionManager(),
     privacy: HostPrivacyManaging = MockHostPrivacyManager(),
     remoteWork: RemoteWorkSessionManaging = MockRemoteWorkSessionManager(),
-    appPasswordStore: AppPasswordStoring = InMemoryAppPasswordStore()
+    appPasswordStore: AppPasswordStoring = InMemoryAppPasswordStore(),
+    commandRunner: CommandRunning = CapturingCommandRunner()
 ) -> AppState {
     AppState(
         sunshineManager: sunshine,
@@ -623,6 +627,21 @@ func makeTestAppState(
         powerAssertionManager: power,
         hostPrivacyManager: privacy,
         remoteWorkSessionManager: remoteWork,
-        appPasswordStore: appPasswordStore
+        appPasswordStore: appPasswordStore,
+        commandRunner: commandRunner
     )
+}
+
+final class CapturingCommandRunner: CommandRunning {
+    struct Invocation: Equatable {
+        let executablePath: String
+        let arguments: [String]
+    }
+    var invocations: [Invocation] = []
+    var nextResult: CommandResult = CommandResult(exitCode: 0)
+
+    func run(executablePath: String, arguments: [String], timeout: TimeInterval) async -> CommandResult {
+        invocations.append(Invocation(executablePath: executablePath, arguments: arguments))
+        return nextResult
+    }
 }

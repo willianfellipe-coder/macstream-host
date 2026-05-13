@@ -195,12 +195,21 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         let currentStartupMessages = messagesFromCurrentSunshineStartup(sunshineMessages)
         let joined = currentStartupMessages.joined(separator: "\n").lowercased()
 
+        if detectsScreenRecordingTccCrash(joined) {
+            return HealthCheck(
+                id: .sunshineScreenRecording,
+                title: "Permissão de Gravação de Tela",
+                status: .fail,
+                detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard e ative o toggle em Ajustes do Sistema."
+            )
+        }
+
         if joined.contains("no screen capture permission") {
             return HealthCheck(
-                id: .sunshineRuntime,
-                title: "Runtime da engine de video",
+                id: .sunshineScreenRecording,
+                title: "Permissão de Gravação de Tela",
                 status: .fail,
-                detail: "A engine de video reportou ausencia de permissao de Gravacao de Tela. Abra Ajustes do Sistema antes do teste real."
+                detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
             )
         }
 
@@ -229,6 +238,20 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             status: .pass,
             detail: "Nenhum erro critico recente foi encontrado nos logs da engine de video."
         )
+    }
+
+    /// Detects the AVVideo displayNames crash, which happens when ScreenCaptureKit
+    /// (called transitively by Sunshine) returns nil display lists because the
+    /// process has no Screen Recording grant. The crash dies before Sunshine
+    /// itself logs "no screen capture permission", so we read the Objective-C
+    /// exception signature directly.
+    private func detectsScreenRecordingTccCrash(_ joined: String) -> Bool {
+        let hasNilInsertException =
+            joined.contains("nsinvalidargumentexception")
+                && joined.contains("initwithobjects:forkeys:count:")
+                && joined.contains("attempt to insert nil object")
+        let hasDisplayNamesFrame = joined.contains("avvideo displaynames")
+        return hasNilInsertException || hasDisplayNamesFrame
     }
 
     private func messagesFromCurrentSunshineStartup(_ messages: [String]) -> [String] {

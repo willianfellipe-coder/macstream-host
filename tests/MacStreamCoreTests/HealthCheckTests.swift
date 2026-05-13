@@ -66,10 +66,37 @@ final class HealthCheckTests: XCTestCase {
         )
 
         let result = await service.runHealthCheck()
-        let runtimeCheck = result.checks.first { $0.id == .sunshineRuntime }
+        let screenCheck = result.checks.first { $0.id == .sunshineScreenRecording }
 
-        XCTAssertEqual(runtimeCheck?.status, .fail)
+        XCTAssertEqual(screenCheck?.status, .fail)
         XCTAssertEqual(result.status, .failing)
+    }
+
+    func testHealthCheckFailsWhenSunshineCrashesWithDisplayNamesNilInsertion() async {
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(),
+            audioDeviceManager: MockAudioDeviceManager(),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager(entries: [
+                LogEntry(
+                    subsystem: "Sunshine stderr",
+                    message: "*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[__NSPlaceholderDictionary initWithObjects:forKeys:count:]: attempt to insert nil object from objects[2]'"
+                ),
+                LogEntry(
+                    subsystem: "Sunshine stderr",
+                    message: "4   sunshine-2025.924.154138            0x00000001 +[AVVideo displayNames] + 252"
+                )
+            ])
+        )
+
+        let result = await service.runHealthCheck()
+        let screenCheck = result.checks.first { $0.id == .sunshineScreenRecording }
+
+        XCTAssertEqual(screenCheck?.status, .fail)
+        XCTAssertTrue(screenCheck?.detail.contains("Gravação de Tela") == true)
     }
 
     func testHealthCheckIgnoresStaleSunshineErrorsBeforeLatestStartup() async {
