@@ -290,6 +290,65 @@ struct DependenciesView: View {
                 }
             }
 
+            GroupBox("Instalação integrada") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await appState.installMissingDependencies() }
+                        } label: {
+                            Label("Instalar dependências ausentes", systemImage: "square.and.arrow.down")
+                        }
+
+                        Button {
+                            Task { await appState.installManagedSunshine() }
+                        } label: {
+                            Label("Instalar Sunshine", systemImage: "sun.max")
+                        }
+
+                        Button {
+                            Task { await appState.installBlackHole() }
+                        } label: {
+                            Label("Instalar BlackHole", systemImage: "speaker.wave.2")
+                        }
+                    }
+
+                    if let progress = appState.dependencyInstallProgress {
+                        HStack(alignment: .top, spacing: 12) {
+                            StatusIcon(status: status(for: progress.stage))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(progress.id.displayName): \(progress.stage.displayName)")
+                                    .font(.headline)
+                                Text(progress.detail)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
+                    ForEach(appState.dependencyInstallerManager.artifacts) { artifact in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(artifact.displayName) \(artifact.version)")
+                                .font(.headline)
+                            Text(artifact.downloadURL.absoluteString)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            Text("SHA-256: \(artifact.sha256)")
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            if artifact.requiresAdministrator || artifact.requiresReboot || artifact.isPrerelease {
+                                Text(artifactNotes(artifact))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(10)
+                        .background(.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Configurar Sunshine manualmente") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Se o Sunshine não estiver no PATH padrão, informe o caminho do binário em Settings e revalide.")
@@ -312,13 +371,32 @@ struct DependenciesView: View {
             GroupBox("Política de instalação") {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Sunshine e BlackHole não são empacotados nesta beta.", systemImage: "shippingbox")
-                    Label("O app abre fontes oficiais e detecta instalações feitas pelo usuário.", systemImage: "safari")
-                    Label("Nenhuma senha de administrador, driver ou porta de firewall é alterada automaticamente.", systemImage: "lock.shield")
+                    Label("Sunshine é baixado de release upstream fixado e instalado em diretório gerenciado pelo usuário.", systemImage: "checkmark.shield")
+                    Label("BlackHole é baixado de URL oficial, verificado por checksum e aberto no Installer.app.", systemImage: "safari")
+                    Label("Portas de firewall não são alteradas automaticamente.", systemImage: "lock.shield")
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private func status(for stage: DependencyInstallStage) -> CheckStatus {
+        switch stage {
+        case .completed: return .pass
+        case .failed: return .fail
+        case .idle, .downloading, .verifying, .installing, .waitingForUser: return .warning
+        }
+    }
+
+    private func artifactNotes(_ artifact: DependencyArtifact) -> String {
+        [
+            artifact.isPrerelease ? "Sunshine macOS fixado em prerelease upstream para obter artefato DMG." : nil,
+            artifact.requiresAdministrator ? "Pode solicitar senha de administrador no Installer.app." : nil,
+            artifact.requiresReboot ? "Pode exigir reinicialização após instalar." : nil
+        ]
+        .compactMap { $0 }
+        .joined(separator: " ")
     }
 }
 

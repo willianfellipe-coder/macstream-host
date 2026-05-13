@@ -8,7 +8,8 @@ This file tracks third-party projects that MacStream Host integrates with, detec
 - Upstream: https://github.com/LizardByte/Sunshine
 - Role: Moonlight-compatible host/server.
 - License: GPL-3.0.
-- Current MVP use: external install detection and orchestration only; no Sunshine binary is bundled.
+- Current MVP use: external install detection or managed user-scoped install from a pinned upstream macOS DMG. Sunshine is not bundled in the MacStream Host source tree or DMG.
+- Managed install target: see `UPSTREAMS.md` for version, URL and checksum.
 - Affiliation: independent upstream project; MacStream Host is not officially affiliated.
 
 ## BlackHole
@@ -17,7 +18,8 @@ This file tracks third-party projects that MacStream Host integrates with, detec
 - Upstream: https://github.com/ExistentialAudio/BlackHole
 - Role: virtual audio loopback device for macOS.
 - License: GPL-3.0.
-- Current MVP use: external install detection and guidance only; no BlackHole driver is bundled or installed.
+- Current MVP use: external install detection or guided `.pkg` installation opened through Installer.app after checksum verification. The BlackHole driver is not bundled in the MacStream Host source tree or DMG.
+- Managed install target: see `UPSTREAMS.md` for version, URL and checksum.
 - Affiliation: independent upstream project; MacStream Host is not officially affiliated.
 
 ## Moonlight

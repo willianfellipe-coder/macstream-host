@@ -57,6 +57,70 @@ final class MockBlackHoleManager: BlackHoleManaging {
     }
 }
 
+final class MockDependencyInstallerManager: DependencyInstalling {
+    let artifacts: [DependencyArtifact]
+    var sunshineResult: DependencyInstallResult
+    var blackHoleResult: DependencyInstallResult
+
+    init() {
+        let sunshineArtifact = DependencyArtifact(
+            id: .sunshine,
+            displayName: "Sunshine Test",
+            version: "test",
+            downloadURL: URL(string: "https://example.com/sunshine.dmg")!,
+            sourceURL: URL(string: "https://example.com/sunshine")!,
+            sha256: "00",
+            fileName: "sunshine.dmg",
+            installerKind: .macOSDMGApplication,
+            requiresAdministrator: false,
+            requiresReboot: false,
+            isPrerelease: false
+        )
+        let blackHoleArtifact = DependencyArtifact(
+            id: .blackHole,
+            displayName: "BlackHole Test",
+            version: "test",
+            downloadURL: URL(string: "https://example.com/blackhole.pkg")!,
+            sourceURL: URL(string: "https://example.com/blackhole")!,
+            sha256: "00",
+            fileName: "blackhole.pkg",
+            installerKind: .macOSPKG,
+            requiresAdministrator: true,
+            requiresReboot: true,
+            isPrerelease: false
+        )
+        self.artifacts = [sunshineArtifact, blackHoleArtifact]
+        self.sunshineResult = DependencyInstallResult(
+            dependencyID: .sunshine,
+            artifact: sunshineArtifact,
+            downloadedPath: "/tmp/sunshine.dmg",
+            installedPath: "/tmp/Sunshine.app",
+            installedBinaryPath: "/tmp/Sunshine.app/Contents/MacOS/sunshine",
+            requiresUserCompletion: false,
+            message: "Sunshine installed for tests."
+        )
+        self.blackHoleResult = DependencyInstallResult(
+            dependencyID: .blackHole,
+            artifact: blackHoleArtifact,
+            downloadedPath: "/tmp/blackhole.pkg",
+            requiresUserCompletion: true,
+            message: "BlackHole installer opened for tests."
+        )
+    }
+
+    func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact? {
+        artifacts.first { $0.id == dependencyID }
+    }
+
+    func installManagedSunshine() async throws -> DependencyInstallResult {
+        sunshineResult
+    }
+
+    func downloadAndOpenBlackHoleInstaller() async throws -> DependencyInstallResult {
+        blackHoleResult
+    }
+}
+
 final class MockPermissionManager: PermissionManaging {
     private let permissionsStatus: MacOSPermissionsStatus
 
@@ -326,6 +390,7 @@ final class StaticMoonlightPairingGuide: MoonlightPairingGuiding {
 func makeTestAppState(
     sunshine: SunshineManaging = MockSunshineManager(),
     blackHole: BlackHoleManaging = MockBlackHoleManager(),
+    dependencyInstaller: DependencyInstalling = MockDependencyInstallerManager(),
     permissions: PermissionManaging = MockPermissionManager(),
     audio: AudioDeviceManaging = MockAudioDeviceManager(),
     network: NetworkDiagnosticsManaging = MockNetworkDiagnosticsManager(),
@@ -339,6 +404,7 @@ func makeTestAppState(
     AppState(
         sunshineManager: sunshine,
         blackHoleManager: blackHole,
+        dependencyInstallerManager: dependencyInstaller,
         permissionManager: permissions,
         audioDeviceManager: audio,
         networkDiagnosticsManager: network,

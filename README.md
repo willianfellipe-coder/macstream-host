@@ -2,7 +2,7 @@
 
 MacStream Host is an experimental macOS application that aims to make Sunshine + BlackHole easier to use as a Moonlight-compatible streaming host.
 
-The project is in the MVP implementation stage. The SwiftUI app and CLI use local safe diagnostics, persistent runtime settings, isolated Sunshine configuration, owned Sunshine process control, user LaunchAgent control, log export, and guided Moonlight pairing. It does not install BlackHole, change firewall settings, request `sudo`, or control user-managed Sunshine processes.
+The project is in the MVP implementation stage. The SwiftUI app and CLI use local safe diagnostics, persistent runtime settings, isolated Sunshine configuration, owned Sunshine process control, user LaunchAgent control, log export, guided dependency installation, and guided Moonlight pairing. It does not change firewall settings, request hidden `sudo`, or control user-managed Sunshine processes.
 
 ## Problem
 
@@ -36,6 +36,9 @@ Implemented now:
 - Safe Sunshine discovery/status, Web UI opening, and start/stop/restart using MacStream Host ownership metadata only.
 - SwiftUI Sunshine screen wired to local diagnostics, isolated config generation, Web UI opening, and owned process control.
 - SwiftUI operational dashboard with preflight CTA, first-run onboarding, dependency detection, Moonlight checklist, copyable pairing addresses, and support ZIP export.
+- Integrated dependency installer for pinned upstream artifacts:
+  - Sunshine macOS DMG is downloaded, SHA-256 verified, mounted, and copied into a user-scoped managed dependency directory.
+  - BlackHole 2ch `.pkg` is downloaded, SHA-256 verified, and opened in Installer.app for explicit user/admin approval.
 - Safe CoreAudio device enumeration and BlackHole 2ch detection for diagnostics.
 - Safe local network diagnostics for IP addresses, Sunshine ports, and Tailscale address detection.
 - Safe permission diagnostics for Screen Recording, Microphone, Accessibility, and guided Local Network validation.
@@ -93,7 +96,9 @@ This repository includes:
 - `UPSTREAMS.md` for pinned upstream versions once selected.
 - `docs/gpl-compliance.md` with the release compliance strategy.
 
-If future releases distribute Sunshine or BlackHole binaries, the exact upstream refs, corresponding source, build scripts, notices, and any modifications must be published.
+MacStream Host does not bundle Sunshine or BlackHole inside this repository or the MacStream Host DMG. The app downloads pinned upstream artifacts at install time and verifies SHA-256 before use. Exact upstream refs, URLs and checksums are tracked in `UPSTREAMS.md`.
+
+If future releases bundle Sunshine or BlackHole binaries directly, the exact upstream refs, corresponding source, build scripts, notices, and any modifications must be published.
 
 ## Repository Layout
 
@@ -201,6 +206,14 @@ Run safe local diagnostics:
 ./scripts/check-environment.sh
 ./scripts/generate-diagnostics.sh
 ```
+
+Use integrated dependency installation from the app:
+
+```bash
+swift run MacStreamHostApp
+```
+
+Open **Dependencies** and choose **Instalar dependências ausentes**. Sunshine is installed into the current user’s MacStream Host application support directory. BlackHole opens the verified official `.pkg` in Installer.app and may require administrator approval and a reboot.
 
 Create a local unsigned beta app bundle or DMG:
 

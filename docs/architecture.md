@@ -2,7 +2,7 @@
 
 ## Initial Review Summary
 
-The reference documents define MacStream Host as a native macOS SwiftUI app that wraps and orchestrates Sunshine and BlackHole for Moonlight-compatible remote streaming. The current milestone is a functional MVP that still avoids privileged helpers, bundled upstream binaries, private APIs, and unsafe network changes.
+The reference documents define MacStream Host as a native macOS SwiftUI app that wraps and orchestrates Sunshine and BlackHole for Moonlight-compatible remote streaming. The current milestone is a functional MVP with guided dependency installation while still avoiding bundled upstream binaries, private APIs, hidden privilege escalation, and unsafe network changes.
 
 ## Main Technical Requirements
 
@@ -11,7 +11,7 @@ The reference documents define MacStream Host as a native macOS SwiftUI app that
 - GPL-3.0-or-later compatible repository and release process.
 - Wrapper/orchestrator approach before any Sunshine or BlackHole fork.
 - Isolated Sunshine configuration under `~/Library/Application Support/MacStreamHost/sunshine/`.
-- BlackHole 2ch detected and guided as a fallback, not silently installed.
+- BlackHole 2ch detected and installed only through explicit verified package flow.
 - Safe diagnostics for permissions, audio, network, Sunshine status, logs, and pairing.
 - LaunchAgent by user context, with explicit safety boundaries and no `sudo`.
 - Web UI advanced access preserved; native pairing only after a stable API is validated.
@@ -31,6 +31,7 @@ The project uses Swift Package Manager with custom target paths under `src/`. Th
 The foundation defines protocols for:
 
 - `PermissionManager`
+- `DependencyInstallerManager`
 - `SunshineManager`
 - `BlackHoleManager`
 - `AudioDeviceManager`
@@ -43,9 +44,9 @@ The foundation defines protocols for:
 
 Runtime code does not depend on mocks. Test doubles live under `tests/`. The SwiftUI app and local CLI diagnostics use real Sunshine discovery, CoreAudio/BlackHole detection, local network diagnostics, permission checks where macOS exposes public APIs, and LaunchAgent status validation. Sunshine start/stop/restart is implemented only for processes launched by MacStream Host and tracked through local ownership metadata.
 
-### No Privileged Automation Yet
+### Dependency Installation Boundary
 
-MacStream Host does not install drivers, ask for administrator credentials, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+MacStream Host can download pinned upstream artifacts at runtime and verify SHA-256 checksums before use. Sunshine is installed into a user-scoped managed dependency directory. BlackHole is a driver, so MacStream Host downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval. The app does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
 
 ## Key Risks And Gaps
 
@@ -54,6 +55,7 @@ MacStream Host does not install drivers, ask for administrator credentials, modi
 - macOS permission status is not always readable through public APIs; practical tests will be needed.
 - Audio capture may vary between native macOS capture and BlackHole routes.
 - Packaging third-party GPL binaries requires exact source/build compliance.
+- Sunshine managed install currently uses a prerelease macOS DMG because the latest stable release does not expose macOS DMG artifacts.
 - Notarization and signing strategy must be decided before public binary releases.
 
 ## Current Foundation

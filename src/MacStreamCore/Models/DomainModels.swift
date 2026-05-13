@@ -119,6 +119,125 @@ public struct DependencyStatus: Identifiable, Codable, Equatable {
     }
 }
 
+public enum ManagedDependencyID: String, Codable, Hashable, CaseIterable {
+    case sunshine
+    case blackHole
+
+    public var displayName: String {
+        switch self {
+        case .sunshine: return "Sunshine"
+        case .blackHole: return "BlackHole 2ch"
+        }
+    }
+}
+
+public enum DependencyInstallerKind: String, Codable, Equatable {
+    case macOSDMGApplication
+    case macOSPKG
+}
+
+public struct DependencyArtifact: Identifiable, Codable, Equatable {
+    public var id: ManagedDependencyID
+    public var displayName: String
+    public var version: String
+    public var downloadURL: URL
+    public var sourceURL: URL
+    public var sha256: String
+    public var fileName: String
+    public var installerKind: DependencyInstallerKind
+    public var requiresAdministrator: Bool
+    public var requiresReboot: Bool
+    public var isPrerelease: Bool
+
+    public init(
+        id: ManagedDependencyID,
+        displayName: String,
+        version: String,
+        downloadURL: URL,
+        sourceURL: URL,
+        sha256: String,
+        fileName: String,
+        installerKind: DependencyInstallerKind,
+        requiresAdministrator: Bool,
+        requiresReboot: Bool,
+        isPrerelease: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.version = version
+        self.downloadURL = downloadURL
+        self.sourceURL = sourceURL
+        self.sha256 = sha256
+        self.fileName = fileName
+        self.installerKind = installerKind
+        self.requiresAdministrator = requiresAdministrator
+        self.requiresReboot = requiresReboot
+        self.isPrerelease = isPrerelease
+    }
+}
+
+public enum DependencyInstallStage: String, Codable, Equatable {
+    case idle
+    case downloading
+    case verifying
+    case installing
+    case waitingForUser
+    case completed
+    case failed
+
+    public var displayName: String {
+        switch self {
+        case .idle: return "Aguardando"
+        case .downloading: return "Baixando"
+        case .verifying: return "Verificando"
+        case .installing: return "Instalando"
+        case .waitingForUser: return "Aguardando usuário"
+        case .completed: return "Concluído"
+        case .failed: return "Falhou"
+        }
+    }
+}
+
+public struct DependencyInstallProgress: Identifiable, Codable, Equatable {
+    public var id: ManagedDependencyID
+    public var stage: DependencyInstallStage
+    public var detail: String
+
+    public init(id: ManagedDependencyID, stage: DependencyInstallStage, detail: String) {
+        self.id = id
+        self.stage = stage
+        self.detail = detail
+    }
+}
+
+public struct DependencyInstallResult: Codable, Equatable {
+    public var dependencyID: ManagedDependencyID
+    public var artifact: DependencyArtifact
+    public var downloadedPath: String
+    public var installedPath: String?
+    public var installedBinaryPath: String?
+    public var requiresUserCompletion: Bool
+    public var message: String
+
+    public init(
+        dependencyID: ManagedDependencyID,
+        artifact: DependencyArtifact,
+        downloadedPath: String,
+        installedPath: String? = nil,
+        installedBinaryPath: String? = nil,
+        requiresUserCompletion: Bool,
+        message: String
+    ) {
+        self.dependencyID = dependencyID
+        self.artifact = artifact
+        self.downloadedPath = downloadedPath
+        self.installedPath = installedPath
+        self.installedBinaryPath = installedBinaryPath
+        self.requiresUserCompletion = requiresUserCompletion
+        self.message = message
+    }
+}
+
 public enum OnboardingStepID: String, Codable, Hashable, CaseIterable {
     case system
     case sunshine

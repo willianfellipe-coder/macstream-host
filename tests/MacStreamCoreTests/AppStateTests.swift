@@ -108,6 +108,30 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
+    func testInstallManagedSunshinePersistsManagedBinaryPath() async {
+        let settingsManager = MockSettingsManager()
+        let appState = makeTestAppState(settingsManager: settingsManager)
+
+        await appState.installManagedSunshine()
+
+        XCTAssertEqual(appState.runtimeSettings.sunshineBinaryPath, "/tmp/Sunshine.app/Contents/MacOS/sunshine")
+        XCTAssertEqual(settingsManager.settings.sunshineBinaryPath, "/tmp/Sunshine.app/Contents/MacOS/sunshine")
+        XCTAssertEqual(appState.dependencyInstallProgress?.stage, .completed)
+        XCTAssertEqual(appState.lastDependencyInstallResult?.dependencyID, .sunshine)
+    }
+
+    @MainActor
+    func testInstallBlackHoleReportsWaitingForInstallerCompletion() async {
+        let appState = makeTestAppState()
+
+        await appState.installBlackHole()
+
+        XCTAssertEqual(appState.dependencyInstallProgress?.id, .blackHole)
+        XCTAssertEqual(appState.dependencyInstallProgress?.stage, .waitingForUser)
+        XCTAssertEqual(appState.lastDependencyInstallResult?.requiresUserCompletion, true)
+    }
+
+    @MainActor
     func testSavingSettingsRebuildsRuntimeSettings() async {
         let settingsManager = MockSettingsManager()
         let appState = makeTestAppState(settingsManager: settingsManager)

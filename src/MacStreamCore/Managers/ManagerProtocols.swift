@@ -16,6 +16,14 @@ public protocol BlackHoleManaging {
     func installationGuidance() async -> String
 }
 
+public protocol DependencyInstalling {
+    var artifacts: [DependencyArtifact] { get }
+
+    func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact?
+    func installManagedSunshine() async throws -> DependencyInstallResult
+    func downloadAndOpenBlackHoleInstaller() async throws -> DependencyInstallResult
+}
+
 public protocol PermissionManaging {
     func currentStatus() async -> MacOSPermissionsStatus
     func openSettings(for permission: MacPermission) async throws

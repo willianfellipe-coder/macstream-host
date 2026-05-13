@@ -5,9 +5,10 @@ These questions must be resolved before implementing deeper integrations or publ
 ## Upstream Versioning
 
 - Current local smoke target: Sunshine `2025.924.154138`, commit `86188d47a7463b0f73b35de18a628353adeaa20e`. Confirm whether this should become the first public MVP target or whether a tagged release should be selected instead.
-- Which exact BlackHole tag or commit should be the first validated MVP target?
+- Managed installer target for Sunshine currently uses prerelease `v2026.508.45922` because it provides macOS DMG artifacts. Should the first public beta accept that prerelease, wait for a stable macOS DMG release, or keep Homebrew as the preferred stable Sunshine path?
+- Managed installer target for BlackHole is `v0.6.1` / `BlackHole2ch-0.6.1.pkg`; validate on a clean macOS machine and document reboot behavior.
 - Decision for this MVP: detect external Sunshine and BlackHole installs; do not bundle either upstream binary.
-- Should a later release add a guided download/install flow for BlackHole, or keep driver installation entirely external?
+- Decision for this installer milestone: download pinned upstream artifacts at runtime, verify SHA-256, install Sunshine into a user-scoped managed directory, and open the BlackHole package through Installer.app for explicit approval.
 
 ## Sunshine Integration
 

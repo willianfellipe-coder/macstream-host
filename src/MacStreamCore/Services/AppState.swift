@@ -20,9 +20,12 @@ public final class AppState: ObservableObject {
     @Published public private(set) var operationalState: HostOperationalState
     @Published public private(set) var lastPreflightResult: PreflightResult?
     @Published public private(set) var completedMoonlightChecklistItems: Set<MoonlightChecklistItemID>
+    @Published public private(set) var dependencyInstallProgress: DependencyInstallProgress?
+    @Published public private(set) var lastDependencyInstallResult: DependencyInstallResult?
 
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
+    public private(set) var dependencyInstallerManager: DependencyInstalling
     public private(set) var permissionManager: PermissionManaging
     public private(set) var audioDeviceManager: AudioDeviceManaging
     public private(set) var networkDiagnosticsManager: NetworkDiagnosticsManaging
@@ -36,6 +39,7 @@ public final class AppState: ObservableObject {
     public init(
         sunshineManager: SunshineManaging,
         blackHoleManager: BlackHoleManaging,
+        dependencyInstallerManager: DependencyInstalling,
         permissionManager: PermissionManaging,
         audioDeviceManager: AudioDeviceManaging,
         networkDiagnosticsManager: NetworkDiagnosticsManaging,
@@ -49,6 +53,7 @@ public final class AppState: ObservableObject {
     ) {
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
+        self.dependencyInstallerManager = dependencyInstallerManager
         self.permissionManager = permissionManager
         self.audioDeviceManager = audioDeviceManager
         self.networkDiagnosticsManager = networkDiagnosticsManager
@@ -70,6 +75,8 @@ public final class AppState: ObservableObject {
         self.operationalState = .unknown
         self.lastPreflightResult = nil
         self.completedMoonlightChecklistItems = []
+        self.dependencyInstallProgress = nil
+        self.lastDependencyInstallResult = nil
     }
 
     public static func localDiagnostics(settingsManager: SettingsManaging = FileSettingsManager()) -> AppState {
@@ -79,6 +86,7 @@ public final class AppState: ObservableObject {
         return AppState(
             sunshineManager: dependencies.sunshine,
             blackHoleManager: dependencies.blackHole,
+            dependencyInstallerManager: dependencies.dependencyInstaller,
             permissionManager: dependencies.permissions,
             audioDeviceManager: dependencies.audio,
             networkDiagnosticsManager: dependencies.network,
@@ -105,6 +113,7 @@ public final class AppState: ObservableObject {
             logDirectoryURL: settings.logDirectoryURL
         )
         let blackHole = DefaultBlackHoleManager(audioDeviceProvider: audioDeviceProvider)
+        let dependencyInstaller = DefaultDependencyInstallerManager(settings: settings)
         let permissions = DefaultPermissionManager()
         let audio = DefaultAudioDeviceManager(
             audioDeviceProvider: audioDeviceProvider,
@@ -132,6 +141,7 @@ public final class AppState: ObservableObject {
         return RuntimeDependencies(
             sunshine: sunshine,
             blackHole: blackHole,
+            dependencyInstaller: dependencyInstaller,
             permissions: permissions,
             audio: audio,
             network: network,
@@ -393,6 +403,86 @@ public final class AppState: ObservableObject {
         )
     }
 
+    public func installManagedSunshine() async {
+        dependencyInstallProgress = DependencyInstallProgress(
+            id: .sunshine,
+            stage: .downloading,
+            detail: "Baixando Sunshine do release upstream fixado."
+        )
+
+        do {
+            let result = try await dependencyInstallerManager.installManagedSunshine()
+            lastDependencyInstallResult = result
+            dependencyInstallProgress = DependencyInstallProgress(
+                id: .sunshine,
+                stage: .completed,
+                detail: result.message
+            )
+
+            if let binaryPath = result.installedBinaryPath {
+                var settings = runtimeSettings
+                settings.sunshineBinaryPath = binaryPath
+                try settingsManager.save(settings.normalized())
+                runtimeSettings = settings.normalized()
+                applyRuntimeDependencies(for: runtimeSettings)
+            }
+
+            lastOperationMessage = result.message
+        } catch {
+            dependencyInstallProgress = DependencyInstallProgress(
+                id: .sunshine,
+                stage: .failed,
+                detail: error.localizedDescription
+            )
+            lastOperationMessage = error.localizedDescription
+        }
+
+        await refresh()
+    }
+
+    public func installBlackHole() async {
+        dependencyInstallProgress = DependencyInstallProgress(
+            id: .blackHole,
+            stage: .downloading,
+            detail: "Baixando instalador oficial do BlackHole 2ch."
+        )
+
+        do {
+            let result = try await dependencyInstallerManager.downloadAndOpenBlackHoleInstaller()
+            lastDependencyInstallResult = result
+            dependencyInstallProgress = DependencyInstallProgress(
+                id: .blackHole,
+                stage: result.requiresUserCompletion ? .waitingForUser : .completed,
+                detail: result.message
+            )
+            lastOperationMessage = result.message
+        } catch {
+            dependencyInstallProgress = DependencyInstallProgress(
+                id: .blackHole,
+                stage: .failed,
+                detail: error.localizedDescription
+            )
+            lastOperationMessage = error.localizedDescription
+        }
+
+        await refresh()
+    }
+
+    public func installMissingDependencies() async {
+        let sunshine = await sunshineManager.status()
+        let blackHole = await blackHoleManager.installationStatus()
+
+        if sunshine.state == .notInstalled {
+            await installManagedSunshine()
+        }
+
+        if blackHole != .installed {
+            await installBlackHole()
+        }
+
+        await refresh()
+    }
+
     public func softReset() async {
         await runOperation(successMessage: "Reset soft concluído.") {
             let service = DefaultSoftResetService(
@@ -559,6 +649,7 @@ public final class AppState: ObservableObject {
         let dependencies = Self.makeRuntimeDependencies(settings: settings)
         sunshineManager = dependencies.sunshine
         blackHoleManager = dependencies.blackHole
+        dependencyInstallerManager = dependencies.dependencyInstaller
         permissionManager = dependencies.permissions
         audioDeviceManager = dependencies.audio
         networkDiagnosticsManager = dependencies.network
@@ -627,6 +718,7 @@ public final class AppState: ObservableObject {
 private struct RuntimeDependencies {
     var sunshine: SunshineManaging
     var blackHole: BlackHoleManaging
+    var dependencyInstaller: DependencyInstalling
     var permissions: PermissionManaging
     var audio: AudioDeviceManaging
     var network: NetworkDiagnosticsManaging
