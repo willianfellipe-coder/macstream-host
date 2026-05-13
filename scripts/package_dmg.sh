@@ -15,6 +15,9 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_STAGING_DIR="$PACKAGE_DIR/dmg-staging"
+SUNSHINE_STAGE_DIR="$ROOT_DIR/Resources/sunshine"
+SUNSHINE_STAGE_APP="$SUNSHINE_STAGE_DIR/Sunshine.app"
+SUNSHINE_BUNDLE_DEST="$RESOURCES_DIR/sunshine"
 SWIFTPM_CACHE_DIR="$PACKAGE_DIR/swiftpm-cache"
 SWIFTPM_CONFIG_DIR="$PACKAGE_DIR/swiftpm-config"
 SWIFTPM_SECURITY_DIR="$PACKAGE_DIR/swiftpm-security"
@@ -22,11 +25,20 @@ XDG_CACHE_DIR="$PACKAGE_DIR/xdg-cache"
 CLANG_MODULE_CACHE_DIR="$PACKAGE_DIR/clang-module-cache"
 
 echo "Building $PRODUCT_NAME $VERSION ($CONFIGURATION)"
+
+if [[ ! -x "$SUNSHINE_STAGE_APP/Contents/MacOS/sunshine" ]]; then
+  echo "Sunshine.app is not staged at $SUNSHINE_STAGE_APP" >&2
+  echo "Run ./scripts/fetch_sunshine.sh first (downloads pinned upstream DMG, verifies SHA-256)." >&2
+  exit 5
+fi
+
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run only."
   echo "App bundle: $APP_DIR"
   echo "DMG staging: $DMG_STAGING_DIR"
   echo "Bundle identifier: org.macstream.host"
+  echo "Sunshine staging: $SUNSHINE_STAGE_APP"
+  echo "Sunshine bundle destination: $SUNSHINE_BUNDLE_DEST/Sunshine.app"
   echo "Create DMG: ${CREATE_DMG:-0}"
   exit 0
 fi
@@ -69,6 +81,15 @@ fi
 cp "$ROOT_DIR/LICENSE" "$RESOURCES_DIR/LICENSE"
 cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$RESOURCES_DIR/THIRD_PARTY_NOTICES.md"
 cp "$ROOT_DIR/UPSTREAMS.md" "$RESOURCES_DIR/UPSTREAMS.md"
+
+rm -rf "$SUNSHINE_BUNDLE_DEST"
+mkdir -p "$SUNSHINE_BUNDLE_DEST"
+/usr/bin/ditto "$SUNSHINE_STAGE_APP" "$SUNSHINE_BUNDLE_DEST/Sunshine.app"
+for sunshine_note in "$SUNSHINE_STAGE_DIR/LICENSE" "$SUNSHINE_STAGE_DIR/README.md"; do
+  if [[ -f "$sunshine_note" ]]; then
+    cp "$sunshine_note" "$SUNSHINE_BUNDLE_DEST/$(basename "$sunshine_note")"
+  fi
+done
 
 ICON_PATH="$RESOURCES_DIR/AppIcon.icns"
 if [[ -f "$ROOT_DIR/packaging/AppIcon.icns" ]]; then

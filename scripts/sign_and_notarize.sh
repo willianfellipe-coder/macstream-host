@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_PATH="${APP_PATH:-$ROOT_DIR/.build/package/MacStream Host.app}"
 DMG_PATH="${DMG_PATH:-$ROOT_DIR/.build/package/MacStream Host.dmg}"
 ENTITLEMENTS="$ROOT_DIR/packaging/entitlements.plist"
+SUNSHINE_APP="$APP_PATH/Contents/Resources/sunshine/Sunshine.app"
 
 if [[ -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
   echo "DEVELOPER_ID_APPLICATION is required, for example: Developer ID Application: Example, Inc. (TEAMID)" >&2
@@ -21,8 +23,39 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+if [[ ! -d "$SUNSHINE_APP" ]]; then
+  echo "Missing embedded Sunshine.app at $SUNSHINE_APP. Run ./scripts/fetch_sunshine.sh then ./scripts/package_dmg.sh." >&2
+  exit 1
+fi
+
+sign_target() {
+  local target="$1"
+  local options="${2:---options runtime}"
+  echo "Signing: $target"
+  codesign --force --timestamp $options --entitlements "$ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" "$target"
+}
+
+echo "Re-signing nested Sunshine.app contents..."
+# Sign embedded dylibs/frameworks inside Sunshine.app first so codesign can
+# stitch a valid seal on the wrapper.
+while IFS= read -r -d '' nested; do
+  sign_target "$nested"
+done < <(/usr/bin/find "$SUNSHINE_APP/Contents" \
+  \( -name "*.dylib" -o -name "*.framework" -o -path "*/MacOS/*" -type f -perm +111 \) \
+  -print0)
+
+# Sign Sunshine.app wrapper.
+sign_target "$SUNSHINE_APP"
+
+echo "Signing helper binaries..."
+for helper in "macstreamctl" "macstream-agent"; do
+  if [[ -x "$APP_PATH/Contents/MacOS/$helper" ]]; then
+    sign_target "$APP_PATH/Contents/MacOS/$helper"
+  fi
+done
+
 echo "Signing app: $APP_PATH"
-codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" --sign "$DEVELOPER_ID_APPLICATION" "$APP_PATH"
+sign_target "$APP_PATH"
 codesign --verify --strict --deep --verbose=2 "$APP_PATH"
 
 if [[ ! -f "$DMG_PATH" ]]; then
