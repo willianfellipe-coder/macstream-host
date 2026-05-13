@@ -1,0 +1,15 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.swiftpm/
+Package.resolved
+dist/
+build/
+*.dmg
+*.zip
+*.log
+Resources/sunshine/bin/
+Resources/audio/packages/

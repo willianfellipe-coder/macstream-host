@@ -1,0 +1,12 @@
+{
+  "env": {},
+  "apps": [
+    {
+      "name": "Desktop",
+      "output": "",
+      "cmd": "",
+      "detached": [],
+      "image-path": "desktop.png"
+    }
+  ]
+}

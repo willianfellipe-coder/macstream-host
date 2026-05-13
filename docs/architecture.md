@@ -1,0 +1,65 @@
+# Architecture
+
+## Initial Review Summary
+
+The reference documents define MacStream Host as a native macOS SwiftUI app that wraps and orchestrates Sunshine and BlackHole for Moonlight-compatible remote streaming. The current milestone is a functional MVP that still avoids privileged helpers, bundled upstream binaries, private APIs, and unsafe network changes.
+
+## Main Technical Requirements
+
+- Native macOS app in Swift and SwiftUI.
+- Target macOS 14.2+ with Apple Silicon as the initial priority.
+- GPL-3.0-or-later compatible repository and release process.
+- Wrapper/orchestrator approach before any Sunshine or BlackHole fork.
+- Isolated Sunshine configuration under `~/Library/Application Support/MacStreamHost/sunshine/`.
+- BlackHole 2ch detected and guided as a fallback, not silently installed.
+- Safe diagnostics for permissions, audio, network, Sunshine status, logs, and pairing.
+- LaunchAgent by user context, with explicit safety boundaries and no `sudo`.
+- Web UI advanced access preserved; native pairing only after a stable API is validated.
+
+## First Architecture Decisions
+
+### SwiftPM With `src/`
+
+The project uses Swift Package Manager with custom target paths under `src/`. This keeps builds simple with `swift build` and `swift test` while matching the requested repository layout.
+
+### Core/App Split
+
+`MacStreamCore` owns domain models, protocols, managers, settings, validation, diagnostics, app state, and health checks. `MacStreamHostApp` owns SwiftUI views. `macstreamctl` is the local development executable for doctor/config/start/stop/logs/reset/LaunchAgent workflows.
+
+### Protocol-First Managers
+
+The foundation defines protocols for:
+
+- `PermissionManager`
+- `SunshineManager`
+- `BlackHoleManager`
+- `AudioDeviceManager`
+- `NetworkDiagnosticsManager`
+- `LaunchAgentManager`
+- `ConfigurationManager`
+- `LogManager`
+- `MoonlightPairingGuide`
+- `HealthCheckService`
+
+Runtime code does not depend on mocks. Test doubles live under `tests/`. The SwiftUI app and local CLI diagnostics use real Sunshine discovery, CoreAudio/BlackHole detection, local network diagnostics, permission checks where macOS exposes public APIs, and LaunchAgent status validation. Sunshine start/stop/restart is implemented only for processes launched by MacStream Host and tracked through local ownership metadata.
+
+### No Privileged Automation Yet
+
+MacStream Host does not install drivers, ask for administrator credentials, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+
+## Key Risks And Gaps
+
+- Sunshine macOS support is still experimental and must be tested against pinned upstream versions.
+- Pairing through Sunshine may not have a stable documented API.
+- macOS permission status is not always readable through public APIs; practical tests will be needed.
+- Audio capture may vary between native macOS capture and BlackHole routes.
+- Packaging third-party GPL binaries requires exact source/build compliance.
+- Notarization and signing strategy must be decided before public binary releases.
+
+## Current Foundation
+
+Configuration generation is real and safe: it creates the isolated Sunshine config directory, writes default `sunshine.conf` and `apps.json`, skips existing files unless overwrite is requested, and backs up existing files before replacement. Runtime settings are persisted in `~/Library/Application Support/MacStreamHost/settings.json`.
+
+Sunshine process control is intentionally narrow. `start` requires the isolated config to exist and refuses to launch if another Sunshine process is already running outside MacStream Host ownership. `stop` only sends `SIGTERM` to the recorded owned PID after validating that the current command line still matches the stored binary and config path. Ownership metadata is stored under `~/Library/Application Support/MacStreamHost/run/`. The app does not kill or adopt an existing user-managed Sunshine process. The SwiftUI Sunshine screen calls the same safe manager methods through `AppState`, then refreshes diagnostics and publishes a user-visible operation message.
+
+LaunchAgent support renders, validates, installs, loads, unloads, and removes only `com.macstream.host.sunshine` for the current user. It validates the Sunshine binary, config path, and log directory before install/load. Audio diagnostics, network diagnostics, and permission diagnostics remain safe local checks.

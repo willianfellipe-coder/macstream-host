@@ -1,0 +1,19 @@
+sunshine_name = MacStream Host
+locale = pt_BR
+min_log_level = info
+system_tray = disabled
+
+keyboard = enabled
+mouse = enabled
+native_pen_touch = enabled
+high_resolution_scrolling = enabled
+
+stream_audio = enabled
+# MVP default: prefer native macOS audio capture when supported.
+# Fallback: set to BlackHole 2ch if native capture fails.
+audio_sink = {{AUDIO_SINK}}
+
+upnp = disabled
+address_family = ipv4
+port = 47989
+origin_web_ui_allowed = pc
