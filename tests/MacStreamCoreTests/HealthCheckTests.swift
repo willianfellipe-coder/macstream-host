@@ -97,4 +97,60 @@ final class HealthCheckTests: XCTestCase {
 
         XCTAssertEqual(runtimeCheck?.status, .pass)
     }
+
+    func testHealthCheckDoesNotFailAudioWhenBlackHoleDriverIsInstalled() async {
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(),
+            audioDeviceManager: MockAudioDeviceManager(devices: [], routeStatus: .fail),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager()
+        )
+
+        let result = await service.runHealthCheck()
+        let audioCheck = result.checks.first { $0.id == .audio }
+
+        XCTAssertEqual(audioCheck?.status, .warning)
+        XCTAssertNotEqual(result.status, .failing)
+    }
+
+    func testHealthCheckUsesRemoteWorkPowerStatusFromAgentReport() async {
+        let remoteWork = MockRemoteWorkSessionManager()
+        remoteWork.report = RemoteWorkSessionReport(
+            state: .running,
+            agentStatus: MacStreamAgentStatus(
+                launchAgentStatus: .loaded,
+                isRunning: true,
+                detail: "Running."
+            ),
+            engineStatus: ManagedEngineStatus(components: [
+                ManagedEngineComponentStatus(id: .video, status: .pass, detail: "Video OK."),
+                ManagedEngineComponentStatus(id: .audio, status: .pass, detail: "Audio OK."),
+                ManagedEngineComponentStatus(id: .network, status: .pass, detail: "Network OK.")
+            ]),
+            powerStatus: PowerAssertionStatus(isActive: true, assertionID: 99, detail: "Agent keep-awake active."),
+            hostPrivacyStatus: .initial,
+            nextStep: "Running."
+        )
+
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(),
+            audioDeviceManager: MockAudioDeviceManager(),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager(),
+            powerAssertionManager: MockPowerAssertionManager(),
+            remoteWorkSessionManager: remoteWork
+        )
+
+        let result = await service.runHealthCheck()
+        let powerCheck = result.checks.first { $0.id == .power }
+
+        XCTAssertEqual(powerCheck?.status, .pass)
+        XCTAssertEqual(powerCheck?.detail, "Agent keep-awake active.")
+    }
 }

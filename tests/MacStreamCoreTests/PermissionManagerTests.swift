@@ -12,6 +12,7 @@ final class PermissionManagerTests: XCTestCase {
                 .localNetwork: .requiresValidation,
                 .accessibility: .granted
             ]),
+            prompter: FakePermissionPrompter(),
             settingsOpener: FakePermissionSettingsOpener()
         )
 
@@ -31,12 +32,13 @@ final class PermissionManagerTests: XCTestCase {
                 .localNetwork: .requiresValidation,
                 .accessibility: .requiresValidation
             ]),
+            prompter: FakePermissionPrompter(),
             settingsOpener: FakePermissionSettingsOpener()
         )
 
         let status = await manager.currentStatus()
 
-        XCTAssertFalse(status.criticalPermissionsSatisfied)
+        XCTAssertTrue(status.criticalPermissionsSatisfied)
         XCTAssertEqual(status.aggregateStatus, .warning)
     }
 
@@ -44,6 +46,7 @@ final class PermissionManagerTests: XCTestCase {
         let opener = FakePermissionSettingsOpener()
         let manager = DefaultPermissionManager(
             statusProvider: FakePermissionStatusProvider(statuses: [:]),
+            prompter: FakePermissionPrompter(),
             settingsOpener: opener
         )
 
@@ -56,6 +59,24 @@ final class PermissionManagerTests: XCTestCase {
         let provider = SystemPermissionStatusProvider()
 
         XCTAssertEqual(provider.status(for: .localNetwork), .requiresValidation)
+    }
+
+    func testRequestPermissionsDelegatesToPrompterAndReportsResults() async {
+        let prompter = FakePermissionPrompter(grantedPermissions: [.microphone])
+        let manager = DefaultPermissionManager(
+            statusProvider: FakePermissionStatusProvider(statuses: [
+                .screenRecording: .requiresValidation,
+                .microphone: .notDetermined
+            ]),
+            prompter: prompter,
+            settingsOpener: FakePermissionSettingsOpener()
+        )
+
+        let results = await manager.requestPermissions([.screenRecording, .microphone])
+
+        XCTAssertEqual(prompter.requestedPermissions, [.screenRecording, .microphone])
+        XCTAssertEqual(results.map(\.id), [.screenRecording, .microphone])
+        XCTAssertTrue(results.allSatisfy(\.promptAttempted))
     }
 }
 
@@ -72,5 +93,19 @@ private final class FakePermissionSettingsOpener: PermissionSettingsOpening {
 
     func openSettings(for permission: MacPermission) throws {
         openedPermissions.append(permission)
+    }
+}
+
+private final class FakePermissionPrompter: PermissionPrompting {
+    private let grantedPermissions: Set<MacPermission>
+    private(set) var requestedPermissions: [MacPermission] = []
+
+    init(grantedPermissions: Set<MacPermission> = []) {
+        self.grantedPermissions = grantedPermissions
+    }
+
+    func requestPermission(_ permission: MacPermission) async -> Bool {
+        requestedPermissions.append(permission)
+        return grantedPermissions.contains(permission)
     }
 }

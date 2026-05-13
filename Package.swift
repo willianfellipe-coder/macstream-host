@@ -20,6 +20,10 @@ let package = Package(
         .executable(
             name: "macstreamctl",
             targets: ["macstreamctl"]
+        ),
+        .executable(
+            name: "macstream-agent",
+            targets: ["macstream-agent"]
         )
     ],
     targets: [
@@ -36,6 +40,11 @@ let package = Package(
             name: "macstreamctl",
             dependencies: ["MacStreamCore"],
             path: "src/macstreamctl"
+        ),
+        .executableTarget(
+            name: "macstream-agent",
+            dependencies: ["MacStreamCore"],
+            path: "src/macstream-agent"
         ),
         .testTarget(
             name: "MacStreamCoreTests",

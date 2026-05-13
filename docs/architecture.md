@@ -2,18 +2,21 @@
 
 ## Initial Review Summary
 
-The reference documents define MacStream Host as a native macOS SwiftUI app that wraps and orchestrates Sunshine and BlackHole for Moonlight-compatible remote streaming. The current milestone is a functional MVP with guided dependency installation while still avoiding bundled upstream binaries, private APIs, hidden privilege escalation, and unsafe network changes.
+The reference documents define MacStream Host as a native macOS SwiftUI app that turns Sunshine, BlackHole, and Moonlight pairing into a productivity-focused remote work host. The current milestone is a functional MVP with a resident MacStream user agent, guided dependency installation, and safe local control while still avoiding bundled upstream binaries, private APIs, hidden privilege escalation, and unsafe network changes.
 
 ## Main Technical Requirements
 
 - Native macOS app in Swift and SwiftUI.
 - Target macOS 14.2+ with Apple Silicon as the initial priority.
 - GPL-3.0-or-later compatible repository and release process.
+- MacStream-first product surface: normal users operate Remote Work Mode, not separate upstream tools.
 - Wrapper/orchestrator approach before any Sunshine or BlackHole fork.
 - Isolated Sunshine configuration under `~/Library/Application Support/MacStreamHost/sunshine/`.
 - BlackHole 2ch detected and installed only through explicit verified package flow.
 - Safe diagnostics for permissions, audio, network, Sunshine status, logs, and pairing.
-- LaunchAgent by user context, with explicit safety boundaries and no `sudo`.
+- Resident `macstream-agent` launched by user LaunchAgent `com.macstream.host.agent`, with explicit safety boundaries and no `sudo`.
+- Native keep-awake power assertions during active remote work sessions.
+- Optional host lock request for privacy, gated behind user action until end-to-end validation proves it does not break streaming.
 - Web UI advanced access preserved; native pairing only after a stable API is validated.
 
 ## First Architecture Decisions
@@ -24,7 +27,7 @@ The project uses Swift Package Manager with custom target paths under `src/`. Th
 
 ### Core/App Split
 
-`MacStreamCore` owns domain models, protocols, managers, settings, validation, diagnostics, app state, and health checks. `MacStreamHostApp` owns SwiftUI views. `macstreamctl` is the local development executable for doctor/config/start/stop/logs/reset/LaunchAgent workflows.
+`MacStreamCore` owns domain models, protocols, managers, settings, validation, diagnostics, app state, and health checks. `MacStreamHostApp` owns SwiftUI views. `macstreamctl` is the local development executable for doctor/config/start/stop/logs/reset/LaunchAgent workflows. `macstream-agent` is the resident user process that receives local commands, starts/stops only MacStream-owned engines, holds keep-awake assertions, handles optional privacy lock requests, and writes heartbeat/status JSON.
 
 ### Protocol-First Managers
 
@@ -37,16 +40,31 @@ The foundation defines protocols for:
 - `AudioDeviceManager`
 - `NetworkDiagnosticsManager`
 - `LaunchAgentManager`
+- `AgentManager`
+- `RemoteWorkSessionManager`
+- `ManagedEngineManager`
+- `PowerAssertionManager`
+- `HostPrivacyManager`
 - `ConfigurationManager`
 - `LogManager`
 - `MoonlightPairingGuide`
 - `HealthCheckService`
 
-Runtime code does not depend on mocks. Test doubles live under `tests/`. The SwiftUI app and local CLI diagnostics use real Sunshine discovery, CoreAudio/BlackHole detection, local network diagnostics, permission checks where macOS exposes public APIs, and LaunchAgent status validation. Sunshine start/stop/restart is implemented only for processes launched by MacStream Host and tracked through local ownership metadata.
+Runtime code does not depend on mocks. Test doubles live under `tests/`. The SwiftUI app and local CLI diagnostics use real engine discovery, CoreAudio/BlackHole detection, local network diagnostics, permission checks where macOS exposes public APIs, LaunchAgent status validation, and agent heartbeat files. Direct engine start/stop/restart remains available for compatibility, but the product path is Remote Work Mode through `macstream-agent`. Engine stop is implemented only for processes launched by MacStream Host and tracked through local ownership metadata.
 
 ### Dependency Installation Boundary
 
-MacStream Host can download pinned upstream artifacts at runtime and verify SHA-256 checksums before use. Sunshine is installed into a user-scoped managed dependency directory. BlackHole is a driver, so MacStream Host downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval. The app does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+MacStream Host can download pinned upstream artifacts at runtime and verify SHA-256 checksums before use. The video engine is installed into a user-scoped managed dependency directory. BlackHole is a CoreAudio driver, not a normal resident service, so MacStream Host downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval. The app controls the resulting audio route through detection, settings, config generation, and validation. It does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+
+### Resident Agent
+
+The resident architecture is user-scoped:
+
+- `LaunchAgentManager` writes `~/Library/LaunchAgents/com.macstream.host.agent.plist`.
+- The plist launches `macstream-agent run`, not Sunshine directly.
+- App/CLI write codable command files under `~/Library/Application Support/MacStreamHost/Agent/`.
+- The agent reads commands, starts/stops only the owned video engine, activates/releases IOPM keep-awake assertions, handles optional host lock requests, and writes `status.json`.
+- App/CLI read `status.json` for `RemoteWorkSessionReport` and surface user-facing Remote Work Mode state.
 
 ## Key Risks And Gaps
 
@@ -64,4 +82,4 @@ Configuration generation is real and safe: it creates the isolated Sunshine conf
 
 Sunshine process control is intentionally narrow. `start` requires the isolated config to exist and refuses to launch if another Sunshine process is already running outside MacStream Host ownership. `stop` only sends `SIGTERM` to the recorded owned PID after validating that the current command line still matches the stored binary and config path. Ownership metadata is stored under `~/Library/Application Support/MacStreamHost/run/`. The app does not kill or adopt an existing user-managed Sunshine process. The SwiftUI Sunshine screen calls the same safe manager methods through `AppState`, then refreshes diagnostics and publishes a user-visible operation message.
 
-LaunchAgent support renders, validates, installs, loads, unloads, and removes only `com.macstream.host.sunshine` for the current user. It validates the Sunshine binary, config path, and log directory before install/load. Audio diagnostics, network diagnostics, and permission diagnostics remain safe local checks.
+LaunchAgent support renders, validates, installs, loads, unloads, and removes only `com.macstream.host.agent` for the current user. It validates the MacStream agent executable and log directory before install/load. Audio diagnostics, network diagnostics, and permission diagnostics remain safe local checks.

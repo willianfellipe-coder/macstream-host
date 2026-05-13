@@ -39,7 +39,17 @@ These questions must be resolved before implementing deeper integrations or publ
 ## LaunchAgent And Login
 
 - Decision for this MVP: use a plain user LaunchAgent and `launchctl bootstrap/bootout gui/<uid>` without sudo.
+- Decision for the unified resident milestone: `com.macstream.host.agent` launches `macstream-agent`; the agent starts/stops the MacStream-owned video engine instead of launchctl starting Sunshine directly.
+- Validate `macstream-agent` behavior across logout/login, app updates, moved app bundles, and unsigned DMG installs.
+- Decide whether the agent command/status file protocol is sufficient for beta or should move to XPC before public release.
 - Should a later packaged app migrate from LaunchAgent to `SMAppService`, or keep LaunchAgent for transparency?
+
+## Power And Host Privacy
+
+- Validate IOPM keep-awake behavior during a long Moonlight/iPad work session on battery and AC power.
+- Validate whether optional host lock via `CGSession -suspend` preserves video, audio, keyboard, and pointer input through Sunshine on macOS 14.2+.
+- Decide whether host lock should remain manual, be offered at session start, or become automatic after end-to-end validation.
+- Investigate whether display sleep, screensaver activation, or Fast User Switching provides a better privacy posture without breaking capture.
 
 ## Packaging And Distribution
 

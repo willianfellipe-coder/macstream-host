@@ -123,6 +123,7 @@ final class MockDependencyInstallerManager: DependencyInstalling {
 
 final class MockPermissionManager: PermissionManaging {
     private let permissionsStatus: MacOSPermissionsStatus
+    private(set) var requestedPermissions: [MacPermission] = []
 
     init(
         permissionsStatus: MacOSPermissionsStatus = MacOSPermissionsStatus(checks: [
@@ -139,21 +140,38 @@ final class MockPermissionManager: PermissionManaging {
         permissionsStatus
     }
 
+    func requestPermissions(_ permissions: [MacPermission]) async -> [PermissionRequestResult] {
+        requestedPermissions.append(contentsOf: permissions)
+        return permissions.map { permission in
+            let status = permissionsStatus.checks.first(where: { $0.id == permission })?.status ?? .unknown
+            return PermissionRequestResult(
+                id: permission,
+                statusBefore: status,
+                statusAfter: status,
+                promptAttempted: status != .granted,
+                detail: "Requested \(permission.displayName)."
+            )
+        }
+    }
+
     func openSettings(for permission: MacPermission) async throws {}
 }
 
 final class MockAudioDeviceManager: AudioDeviceManaging {
     private let devices: [AudioDevice]
     private let captureMode: AudioCaptureMode
+    private let routeStatus: CheckStatus?
 
     init(
         devices: [AudioDevice] = [
             AudioDevice(id: "test-built-in-output", name: "Mac Speakers", channels: 2, sampleRate: 48_000, isInput: false, isOutput: true, status: .available)
         ],
-        captureMode: AudioCaptureMode = .nativeSystemAudio
+        captureMode: AudioCaptureMode = .nativeSystemAudio,
+        routeStatus: CheckStatus? = nil
     ) {
         self.devices = devices
         self.captureMode = captureMode
+        self.routeStatus = routeStatus
     }
 
     func listAudioDevices() async -> [AudioDevice] {
@@ -165,7 +183,11 @@ final class MockAudioDeviceManager: AudioDeviceManaging {
     }
 
     func validateAudioRoute() async -> CheckStatus {
-        devices.isEmpty ? .warning : .pass
+        if let routeStatus {
+            return routeStatus
+        }
+
+        return devices.isEmpty ? .warning : .pass
     }
 }
 
@@ -237,6 +259,151 @@ final class MockLaunchAgentManager: LaunchAgentManaging {
 
     func unload() async throws {
         currentStatus = .installed
+    }
+}
+
+final class MockAgentManager: AgentManaging {
+    let statusURL: URL
+    let commandURL: URL
+    var currentStatus: MacStreamAgentStatus
+    var lastReport: RemoteWorkSessionReport?
+    var commands: [MacStreamAgentCommand] = []
+    var didInstall = false
+    var didLoad = false
+    var didUnload = false
+
+    init(
+        statusURL: URL = URL(fileURLWithPath: "/tmp/macstream-agent-status.json"),
+        commandURL: URL = URL(fileURLWithPath: "/tmp/macstream-agent-command.json"),
+        status: MacStreamAgentStatus = .initial
+    ) {
+        self.statusURL = statusURL
+        self.commandURL = commandURL
+        self.currentStatus = status
+    }
+
+    func status() async -> MacStreamAgentStatus {
+        currentStatus
+    }
+
+    func install() async throws {
+        didInstall = true
+        currentStatus.launchAgentStatus = .installed
+    }
+
+    func load() async throws {
+        didLoad = true
+        currentStatus.launchAgentStatus = .loaded
+        currentStatus.isRunning = true
+        currentStatus.lastHeartbeat = Date()
+    }
+
+    func unload() async throws {
+        didUnload = true
+        currentStatus.launchAgentStatus = .installed
+        currentStatus.isRunning = false
+    }
+
+    func writeCommand(_ command: MacStreamAgentCommand) throws {
+        commands.append(command)
+    }
+
+    func readLastReport() throws -> RemoteWorkSessionReport? {
+        lastReport
+    }
+
+    func writeReport(_ report: RemoteWorkSessionReport) throws {
+        lastReport = report
+    }
+}
+
+final class MockPowerAssertionManager: PowerAssertionManaging {
+    var current = PowerAssertionStatus.inactive
+    var acquiredPolicies: [PowerPolicy] = []
+    var didRelease = false
+
+    func currentStatus() async -> PowerAssertionStatus {
+        current
+    }
+
+    func acquire(policy: PowerPolicy) async throws -> PowerAssertionStatus {
+        acquiredPolicies.append(policy)
+        current = PowerAssertionStatus(isActive: true, policy: policy, assertionID: 42, detail: "Power assertion active.")
+        return current
+    }
+
+    func release() async throws -> PowerAssertionStatus {
+        didRelease = true
+        current = PowerAssertionStatus(isActive: false, detail: "Power assertion released.")
+        return current
+    }
+}
+
+final class MockHostPrivacyManager: HostPrivacyManaging {
+    var current = HostPrivacyStatus.initial
+
+    func currentStatus() async -> HostPrivacyStatus {
+        current
+    }
+
+    func apply(policy: HostPrivacyPolicy) async {
+        current.policy = policy
+    }
+
+    func lockHost() async throws -> HostPrivacyStatus {
+        current = HostPrivacyStatus(lastAction: .lockSucceeded, detail: "Host lock requested.")
+        return current
+    }
+}
+
+final class MockManagedEngineManager: ManagedEngineManaging {
+    var current = ManagedEngineStatus(components: [
+        ManagedEngineComponentStatus(id: .video, status: .pass, detail: "Video OK."),
+        ManagedEngineComponentStatus(id: .audio, status: .pass, detail: "Audio OK."),
+        ManagedEngineComponentStatus(id: .network, status: .pass, detail: "Network OK.")
+    ])
+
+    func status() async -> ManagedEngineStatus {
+        current
+    }
+}
+
+final class MockRemoteWorkSessionManager: RemoteWorkSessionManaging {
+    var prepared = false
+    var started = false
+    var stopped = false
+    var didLock = false
+    var report = RemoteWorkSessionReport.initial
+
+    func prepare(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport {
+        prepared = true
+        report.state = .ready
+        report.nextStep = "Ready."
+        return report
+    }
+
+    func start(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport {
+        started = true
+        report.state = .starting
+        report.nextStep = "Starting."
+        return report
+    }
+
+    func stop() async throws -> RemoteWorkSessionReport {
+        stopped = true
+        report.state = .stopping
+        report.nextStep = "Stopping."
+        return report
+    }
+
+    func status() async -> RemoteWorkSessionReport {
+        report
+    }
+
+    func lockHostForPrivacy() async throws -> RemoteWorkSessionReport {
+        didLock = true
+        report.hostPrivacyStatus = HostPrivacyStatus(lastAction: .lockRequested, detail: "Lock requested.")
+        return report
     }
 }
 
@@ -399,7 +566,12 @@ func makeTestAppState(
     settingsManager: SettingsManaging = MockSettingsManager(),
     runtimeSettings: MacStreamHostSettings = .defaults(),
     log: LogManaging = MockLogManager(),
-    pairingGuide: MoonlightPairingGuiding = StaticMoonlightPairingGuide()
+    pairingGuide: MoonlightPairingGuiding = StaticMoonlightPairingGuide(),
+    agent: AgentManaging = MockAgentManager(),
+    engine: ManagedEngineManaging = MockManagedEngineManager(),
+    power: PowerAssertionManaging = MockPowerAssertionManager(),
+    privacy: HostPrivacyManaging = MockHostPrivacyManager(),
+    remoteWork: RemoteWorkSessionManaging = MockRemoteWorkSessionManager()
 ) -> AppState {
     AppState(
         sunshineManager: sunshine,
@@ -421,7 +593,16 @@ func makeTestAppState(
             audioDeviceManager: audio,
             networkDiagnosticsManager: network,
             launchAgentManager: launchAgent,
-            logManager: log
-        )
+            logManager: log,
+            agentManager: agent,
+            powerAssertionManager: power,
+            hostPrivacyManager: privacy,
+            remoteWorkSessionManager: remoteWork
+        ),
+        agentManager: agent,
+        managedEngineManager: engine,
+        powerAssertionManager: power,
+        hostPrivacyManager: privacy,
+        remoteWorkSessionManager: remoteWork
     )
 }

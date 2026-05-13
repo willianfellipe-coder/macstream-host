@@ -147,6 +147,20 @@ final class LaunchAgentManagerTests: XCTestCase {
         XCTAssertEqual(runner.calls.first?.arguments, ["bootstrap", "gui/501", installedURL.path])
     }
 
+    func testLoadIsNoOpWhenLaunchAgentIsAlreadyLoaded() async throws {
+        let directory = try makeTemporaryDirectory()
+        let installedURL = directory.appendingPathComponent("installed.plist")
+        let runner = RecordingLaunchctlRunner()
+        runner.result = CommandResult(exitCode: 0)
+        let manager = makeManager(installedPlistURL: installedURL, runner: runner)
+        try manager.renderPlist().write(to: installedURL, atomically: true, encoding: .utf8)
+
+        try await manager.load()
+
+        XCTAssertEqual(runner.calls.count, 1)
+        XCTAssertEqual(runner.calls.first?.arguments.first, "print")
+    }
+
     private func makeManager(
         sunshineBinaryPath: String = "/usr/local/bin/sunshine",
         sunshineConfigPath: String = "/tmp/sunshine.conf",

@@ -80,6 +80,173 @@ public enum HostOperationalState: String, Codable, Equatable, CaseIterable {
     }
 }
 
+public enum RemoteWorkModeState: String, Codable, Equatable, CaseIterable {
+    case notReady
+    case ready
+    case starting
+    case running
+    case degraded
+    case stopping
+    case blocked
+
+    public var displayName: String {
+        switch self {
+        case .notReady: return "Nao preparado"
+        case .ready: return "Pronto"
+        case .starting: return "Iniciando"
+        case .running: return "Modo remoto ativo"
+        case .degraded: return "Modo remoto degradado"
+        case .stopping: return "Parando"
+        case .blocked: return "Bloqueado"
+        }
+    }
+
+    public var checkStatus: CheckStatus {
+        switch self {
+        case .ready, .running: return .pass
+        case .notReady, .starting, .stopping, .degraded: return .warning
+        case .blocked: return .fail
+        }
+    }
+}
+
+public enum ManagedEngineKind: String, Codable, Hashable, CaseIterable {
+    case video
+    case audio
+    case network
+
+    public var displayName: String {
+        switch self {
+        case .video: return "Video"
+        case .audio: return "Audio"
+        case .network: return "Rede"
+        }
+    }
+}
+
+public struct ManagedEngineComponentStatus: Identifiable, Codable, Equatable {
+    public var id: ManagedEngineKind
+    public var status: CheckStatus
+    public var detail: String
+
+    public init(id: ManagedEngineKind, status: CheckStatus, detail: String) {
+        self.id = id
+        self.status = status
+        self.detail = detail
+    }
+}
+
+public struct ManagedEngineStatus: Codable, Equatable {
+    public var components: [ManagedEngineComponentStatus]
+
+    public init(components: [ManagedEngineComponentStatus]) {
+        self.components = components
+    }
+
+    public var aggregateStatus: CheckStatus {
+        if components.contains(where: { $0.status == .fail }) {
+            return .fail
+        }
+
+        if components.contains(where: { $0.status == .warning || $0.status == .unknown }) {
+            return .warning
+        }
+
+        return components.isEmpty ? .unknown : .pass
+    }
+
+    public static let initial = ManagedEngineStatus(components: [
+        ManagedEngineComponentStatus(id: .video, status: .unknown, detail: "Engine de video ainda nao avaliada."),
+        ManagedEngineComponentStatus(id: .audio, status: .unknown, detail: "Rota de audio ainda nao avaliada."),
+        ManagedEngineComponentStatus(id: .network, status: .unknown, detail: "Rede ainda nao avaliada.")
+    ])
+}
+
+public struct PowerPolicy: Codable, Equatable {
+    public var preventSystemSleep: Bool
+    public var keepDisplayAwake: Bool
+
+    public init(preventSystemSleep: Bool = true, keepDisplayAwake: Bool = false) {
+        self.preventSystemSleep = preventSystemSleep
+        self.keepDisplayAwake = keepDisplayAwake
+    }
+
+    public static let defaults = PowerPolicy()
+}
+
+public struct PowerAssertionStatus: Codable, Equatable {
+    public var isActive: Bool
+    public var policy: PowerPolicy
+    public var assertionID: UInt32?
+    public var detail: String
+
+    public init(
+        isActive: Bool,
+        policy: PowerPolicy = .defaults,
+        assertionID: UInt32? = nil,
+        detail: String
+    ) {
+        self.isActive = isActive
+        self.policy = policy
+        self.assertionID = assertionID
+        self.detail = detail
+    }
+
+    public var checkStatus: CheckStatus {
+        isActive ? .pass : .warning
+    }
+
+    public static let inactive = PowerAssertionStatus(
+        isActive: false,
+        detail: "MacStream nao esta mantendo o Mac acordado agora."
+    )
+}
+
+public struct HostPrivacyPolicy: Codable, Equatable {
+    public var offerLockOnSessionStart: Bool
+    public var allowManualLock: Bool
+
+    public init(offerLockOnSessionStart: Bool = true, allowManualLock: Bool = true) {
+        self.offerLockOnSessionStart = offerLockOnSessionStart
+        self.allowManualLock = allowManualLock
+    }
+
+    public static let defaults = HostPrivacyPolicy()
+}
+
+public enum HostPrivacyAction: String, Codable, Equatable, CaseIterable {
+    case none
+    case lockRequested
+    case lockSucceeded
+    case lockFailed
+}
+
+public struct HostPrivacyStatus: Codable, Equatable {
+    public var policy: HostPrivacyPolicy
+    public var lastAction: HostPrivacyAction
+    public var detail: String
+
+    public init(
+        policy: HostPrivacyPolicy = .defaults,
+        lastAction: HostPrivacyAction = .none,
+        detail: String = "Privacidade do host aguardando acao do usuario."
+    ) {
+        self.policy = policy
+        self.lastAction = lastAction
+        self.detail = detail
+    }
+
+    public var checkStatus: CheckStatus {
+        switch lastAction {
+        case .lockSucceeded: return .pass
+        case .lockFailed: return .fail
+        case .none, .lockRequested: return .warning
+        }
+    }
+
+    public static let initial = HostPrivacyStatus()
+}
+
 public enum DependencyID: String, Codable, Hashable, CaseIterable {
     case sunshine
     case blackHole
@@ -386,9 +553,9 @@ public enum MacPermission: String, Codable, Hashable, CaseIterable {
 
     public var isCriticalForMVP: Bool {
         switch self {
-        case .screenRecording, .microphone, .localNetwork:
+        case .screenRecording, .microphone:
             return true
-        case .accessibility:
+        case .localNetwork, .accessibility:
             return false
         }
     }
@@ -437,6 +604,28 @@ public struct PermissionCheck: Identifiable, Codable, Equatable {
     }
 }
 
+public struct PermissionRequestResult: Identifiable, Codable, Equatable {
+    public var id: MacPermission
+    public var statusBefore: PermissionStatus
+    public var statusAfter: PermissionStatus
+    public var promptAttempted: Bool
+    public var detail: String
+
+    public init(
+        id: MacPermission,
+        statusBefore: PermissionStatus,
+        statusAfter: PermissionStatus,
+        promptAttempted: Bool,
+        detail: String
+    ) {
+        self.id = id
+        self.statusBefore = statusBefore
+        self.statusAfter = statusAfter
+        self.promptAttempted = promptAttempted
+        self.detail = detail
+    }
+}
+
 public struct MacOSPermissionsStatus: Codable, Equatable {
     public var checks: [PermissionCheck]
 
@@ -466,6 +655,14 @@ public struct MacOSPermissionsStatus: Codable, Equatable {
         }
 
         return .unknown
+    }
+
+    public var runtimeGuidanceStatus: CheckStatus {
+        if checks.isEmpty {
+            return .unknown
+        }
+
+        return checks.allSatisfy { $0.status.checkStatus == .pass } ? .pass : .warning
     }
 }
 
@@ -522,33 +719,66 @@ public enum AudioCaptureMode: String, Codable, Equatable, Hashable, CaseIterable
 
 public struct MacStreamHostSettings: Codable, Equatable {
     public var sunshineBinaryPath: String?
+    public var agentExecutablePath: String?
     public var configDirectoryPath: String
     public var logDirectoryPath: String
     public var audioCaptureMode: AudioCaptureMode
+    public var powerPolicy: PowerPolicy
+    public var hostPrivacyPolicy: HostPrivacyPolicy
 
     public init(
         sunshineBinaryPath: String? = nil,
+        agentExecutablePath: String? = nil,
         configDirectoryPath: String,
         logDirectoryPath: String,
-        audioCaptureMode: AudioCaptureMode = .blackHole2ch
+        audioCaptureMode: AudioCaptureMode = .blackHole2ch,
+        powerPolicy: PowerPolicy = .defaults,
+        hostPrivacyPolicy: HostPrivacyPolicy = .defaults
     ) {
         self.sunshineBinaryPath = sunshineBinaryPath
+        self.agentExecutablePath = agentExecutablePath
         self.configDirectoryPath = configDirectoryPath
         self.logDirectoryPath = logDirectoryPath
         self.audioCaptureMode = audioCaptureMode
+        self.powerPolicy = powerPolicy
+        self.hostPrivacyPolicy = hostPrivacyPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sunshineBinaryPath
+        case agentExecutablePath
+        case configDirectoryPath
+        case logDirectoryPath
+        case audioCaptureMode
+        case powerPolicy
+        case hostPrivacyPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sunshineBinaryPath = try container.decodeIfPresent(String.self, forKey: .sunshineBinaryPath)
+        agentExecutablePath = try container.decodeIfPresent(String.self, forKey: .agentExecutablePath)
+        configDirectoryPath = try container.decode(String.self, forKey: .configDirectoryPath)
+        logDirectoryPath = try container.decode(String.self, forKey: .logDirectoryPath)
+        audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .blackHole2ch
+        powerPolicy = try container.decodeIfPresent(PowerPolicy.self, forKey: .powerPolicy) ?? .defaults
+        hostPrivacyPolicy = try container.decodeIfPresent(HostPrivacyPolicy.self, forKey: .hostPrivacyPolicy) ?? .defaults
     }
 
     public static func defaults(fileManager: FileManager = .default) -> MacStreamHostSettings {
         let home = fileManager.homeDirectoryForCurrentUser
         return MacStreamHostSettings(
             sunshineBinaryPath: nil,
+            agentExecutablePath: nil,
             configDirectoryPath: home
                 .appendingPathComponent("Library/Application Support/MacStreamHost/sunshine")
                 .path,
             logDirectoryPath: home
                 .appendingPathComponent("Library/Logs/MacStreamHost")
                 .path,
-            audioCaptureMode: .blackHole2ch
+            audioCaptureMode: .blackHole2ch,
+            powerPolicy: .defaults,
+            hostPrivacyPolicy: .defaults
         )
     }
 
@@ -568,6 +798,20 @@ public struct MacStreamHostSettings: Codable, Equatable {
         URL(fileURLWithPath: (logDirectoryPath as NSString).expandingTildeInPath)
     }
 
+    public var agentStateDirectoryURL: URL {
+        configDirectoryURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Agent", isDirectory: true)
+    }
+
+    public var agentStatusURL: URL {
+        agentStateDirectoryURL.appendingPathComponent("status.json")
+    }
+
+    public var agentCommandURL: URL {
+        agentStateDirectoryURL.appendingPathComponent("command.json")
+    }
+
     public var audioSink: String? {
         switch audioCaptureMode {
         case .blackHole2ch:
@@ -580,9 +824,12 @@ public struct MacStreamHostSettings: Codable, Equatable {
     public func normalized() -> MacStreamHostSettings {
         MacStreamHostSettings(
             sunshineBinaryPath: sunshineBinaryPath?.isEmpty == true ? nil : sunshineBinaryPath,
+            agentExecutablePath: agentExecutablePath?.isEmpty == true ? nil : agentExecutablePath,
             configDirectoryPath: (configDirectoryPath as NSString).expandingTildeInPath,
             logDirectoryPath: (logDirectoryPath as NSString).expandingTildeInPath,
-            audioCaptureMode: audioCaptureMode == .unknown ? .blackHole2ch : audioCaptureMode
+            audioCaptureMode: audioCaptureMode == .unknown ? .blackHole2ch : audioCaptureMode,
+            powerPolicy: powerPolicy,
+            hostPrivacyPolicy: hostPrivacyPolicy
         )
     }
 }
@@ -677,13 +924,74 @@ public enum LaunchAgentStatus: String, Codable, Equatable, CaseIterable {
     }
 }
 
+public struct MacStreamAgentStatus: Codable, Equatable {
+    public var launchAgentStatus: LaunchAgentStatus
+    public var isRunning: Bool
+    public var version: String?
+    public var processID: Int32?
+    public var lastHeartbeat: Date?
+    public var statePath: String?
+    public var detail: String
+
+    public init(
+        launchAgentStatus: LaunchAgentStatus,
+        isRunning: Bool,
+        version: String? = nil,
+        processID: Int32? = nil,
+        lastHeartbeat: Date? = nil,
+        statePath: String? = nil,
+        detail: String
+    ) {
+        self.launchAgentStatus = launchAgentStatus
+        self.isRunning = isRunning
+        self.version = version
+        self.processID = processID
+        self.lastHeartbeat = lastHeartbeat
+        self.statePath = statePath
+        self.detail = detail
+    }
+
+    public var checkStatus: CheckStatus {
+        if isRunning {
+            return .pass
+        }
+
+        return launchAgentStatus.checkStatus
+    }
+
+    public static let initial = MacStreamAgentStatus(
+        launchAgentStatus: .notInstalled,
+        isRunning: false,
+        detail: "Agente residente ainda nao instalado."
+    )
+}
+
 public struct LaunchAgentDefinition: Codable, Equatable {
     public var label: String
-    public var sunshineBinaryPath: String
-    public var sunshineConfigPath: String
+    public var executablePath: String
+    public var arguments: [String]
+    public var requiredFilePaths: [String]
     public var logDirectoryPath: String
     public var runAtLoad: Bool
     public var keepAlive: Bool
+
+    public init(
+        label: String = "com.macstream.host.agent",
+        executablePath: String,
+        arguments: [String] = ["run"],
+        requiredFilePaths: [String] = [],
+        logDirectoryPath: String,
+        runAtLoad: Bool = true,
+        keepAlive: Bool = true
+    ) {
+        self.label = label
+        self.executablePath = executablePath
+        self.arguments = arguments
+        self.requiredFilePaths = requiredFilePaths
+        self.logDirectoryPath = logDirectoryPath
+        self.runAtLoad = runAtLoad
+        self.keepAlive = keepAlive
+    }
 
     public init(
         label: String = "com.macstream.host.sunshine",
@@ -693,29 +1001,29 @@ public struct LaunchAgentDefinition: Codable, Equatable {
         runAtLoad: Bool = true,
         keepAlive: Bool = true
     ) {
-        self.label = label
-        self.sunshineBinaryPath = sunshineBinaryPath
-        self.sunshineConfigPath = sunshineConfigPath
-        self.logDirectoryPath = logDirectoryPath
-        self.runAtLoad = runAtLoad
-        self.keepAlive = keepAlive
+        self.init(
+            label: label,
+            executablePath: sunshineBinaryPath,
+            arguments: [sunshineConfigPath],
+            requiredFilePaths: [sunshineConfigPath],
+            logDirectoryPath: logDirectoryPath,
+            runAtLoad: runAtLoad,
+            keepAlive: keepAlive
+        )
     }
 
     public var standardOutPath: String {
-        URL(fileURLWithPath: logDirectoryPath).appendingPathComponent("sunshine.out.log").path
+        URL(fileURLWithPath: logDirectoryPath).appendingPathComponent("\(label).out.log").path
     }
 
     public var standardErrorPath: String {
-        URL(fileURLWithPath: logDirectoryPath).appendingPathComponent("sunshine.err.log").path
+        URL(fileURLWithPath: logDirectoryPath).appendingPathComponent("\(label).err.log").path
     }
 
     public var propertyList: [String: Any] {
         [
             "Label": label,
-            "ProgramArguments": [
-                sunshineBinaryPath,
-                sunshineConfigPath
-            ],
+            "ProgramArguments": [executablePath] + arguments,
             "RunAtLoad": runAtLoad,
             "KeepAlive": keepAlive,
             "StandardOutPath": standardOutPath,
@@ -770,6 +1078,8 @@ public struct PairingStep: Identifiable, Codable, Equatable {
 public enum HealthCheckID: String, Codable, Hashable, CaseIterable {
     case macOSVersion
     case architecture
+    case macStreamAgent
+    case remoteWorkMode
     case sunshine
     case sunshineRuntime
     case webUI
@@ -778,6 +1088,8 @@ public enum HealthCheckID: String, Codable, Hashable, CaseIterable {
     case audio
     case network
     case launchAgent
+    case power
+    case hostPrivacy
 }
 
 public struct HealthCheck: Identifiable, Codable, Equatable {
@@ -989,6 +1301,68 @@ public struct PreflightResult: Codable, Equatable {
         self.nextStep = nextStep
         self.startedSunshine = startedSunshine
     }
+}
+
+public enum MacStreamAgentCommandKind: String, Codable, Equatable, CaseIterable {
+    case startRemoteWork
+    case stopRemoteWork
+    case lockHost
+    case shutdown
+}
+
+public struct MacStreamAgentCommand: Codable, Equatable {
+    public var id: UUID
+    public var kind: MacStreamAgentCommandKind
+    public var createdAt: Date
+
+    public init(id: UUID = UUID(), kind: MacStreamAgentCommandKind, createdAt: Date = Date()) {
+        self.id = id
+        self.kind = kind
+        self.createdAt = createdAt
+    }
+}
+
+public struct RemoteWorkSessionReport: Codable, Equatable {
+    public var generatedAt: Date
+    public var state: RemoteWorkModeState
+    public var agentStatus: MacStreamAgentStatus
+    public var engineStatus: ManagedEngineStatus
+    public var powerStatus: PowerAssertionStatus
+    public var hostPrivacyStatus: HostPrivacyStatus
+    public var blockers: [String]
+    public var warnings: [String]
+    public var nextStep: String
+
+    public init(
+        generatedAt: Date = Date(),
+        state: RemoteWorkModeState,
+        agentStatus: MacStreamAgentStatus,
+        engineStatus: ManagedEngineStatus,
+        powerStatus: PowerAssertionStatus,
+        hostPrivacyStatus: HostPrivacyStatus,
+        blockers: [String] = [],
+        warnings: [String] = [],
+        nextStep: String
+    ) {
+        self.generatedAt = generatedAt
+        self.state = state
+        self.agentStatus = agentStatus
+        self.engineStatus = engineStatus
+        self.powerStatus = powerStatus
+        self.hostPrivacyStatus = hostPrivacyStatus
+        self.blockers = blockers
+        self.warnings = warnings
+        self.nextStep = nextStep
+    }
+
+    public static let initial = RemoteWorkSessionReport(
+        state: .notReady,
+        agentStatus: .initial,
+        engineStatus: .initial,
+        powerStatus: .inactive,
+        hostPrivacyStatus: .initial,
+        nextStep: "Prepare o MacStream antes de iniciar uma sessao remota."
+    )
 }
 
 public struct SoftResetResult: Codable, Equatable {

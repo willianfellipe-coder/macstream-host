@@ -45,6 +45,7 @@ SWIFT_BUILD_ARGS=(
 )
 swift build "${SWIFT_BUILD_ARGS[@]}" --product "$PRODUCT_NAME"
 swift build "${SWIFT_BUILD_ARGS[@]}" --product macstreamctl
+swift build "${SWIFT_BUILD_ARGS[@]}" --product macstream-agent
 
 BINARY_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 BINARY_PATH="$BINARY_DIR/$PRODUCT_NAME"
@@ -59,6 +60,10 @@ cp "$BINARY_PATH" "$MACOS_DIR/$APP_NAME"
 
 if [[ -x "$BINARY_DIR/macstreamctl" ]]; then
   cp "$BINARY_DIR/macstreamctl" "$MACOS_DIR/macstreamctl"
+fi
+
+if [[ -x "$BINARY_DIR/macstream-agent" ]]; then
+  cp "$BINARY_DIR/macstream-agent" "$MACOS_DIR/macstream-agent"
 fi
 
 cp "$ROOT_DIR/LICENSE" "$RESOURCES_DIR/LICENSE"

@@ -1,20 +1,20 @@
 # MacStream Host
 
-MacStream Host is an experimental macOS application that aims to make Sunshine + BlackHole easier to use as a Moonlight-compatible streaming host.
+MacStream Host is an experimental macOS application that aims to make a Mac behave like a productivity-focused Moonlight-compatible remote work host.
 
-The project is in the MVP implementation stage. The SwiftUI app and CLI use local safe diagnostics, persistent runtime settings, isolated Sunshine configuration, owned Sunshine process control, user LaunchAgent control, log export, guided dependency installation, and guided Moonlight pairing. It does not change firewall settings, request hidden `sudo`, or control user-managed Sunshine processes.
+The project is in the MVP implementation stage. The SwiftUI app and CLI use local safe diagnostics, persistent runtime settings, isolated engine configuration, owned process control, a resident user agent, log export, guided dependency installation, and guided Moonlight pairing. It does not change firewall settings, request hidden `sudo`, or control user-managed Sunshine processes.
 
 ## Problem
 
 Running a Mac as a Moonlight host today usually requires several separate steps: installing Sunshine, configuring audio capture, granting macOS permissions, checking network ports, opening the Sunshine Web UI, and pairing Moonlight manually. That workflow is powerful, but it is too technical for many users.
 
-MacStream Host is intended to become a native macOS wrapper/orchestrator that turns that setup into a guided app experience.
+MacStream Host is intended to become a native macOS remote work product that hides that complexity behind one guided app experience.
 
 ## Goal
 
-The goal is to let a user install the app, open it, understand missing permissions/dependencies, start or stop Sunshine, validate audio/video/network readiness, and pair with Moonlight with as little friction as possible.
+The goal is to let a user install the app, open it, understand missing permissions/dependencies, start or stop Remote Work Mode, validate audio/video/network readiness, keep the Mac awake during a session, optionally lock the host screen for privacy, and pair with Moonlight with as little friction as possible.
 
-The app is not a Moonlight client and does not replace Sunshine. It is a macOS-first layer around the existing open source ecosystem.
+The app is not a Moonlight client. Sunshine remains the streaming engine and BlackHole remains an independent CoreAudio driver, but the normal MacStream UI treats them as managed internal components rather than user-facing products.
 
 ## Relationship To Upstream Projects
 
@@ -33,6 +33,10 @@ Implemented now:
 - Swift Package structure using Swift + SwiftUI.
 - Runtime app/CLI managers use real local diagnostics; mocks live in tests only.
 - Persistent runtime settings for Sunshine binary path, config directory, log directory, and audio mode.
+- Resident `macstream-agent` target launched by user LaunchAgent `com.macstream.host.agent`.
+- Remote Work Mode commands in app and CLI for prepare/start/stop/status/lock.
+- macOS keep-awake power assertions while Remote Work Mode is active.
+- Optional host privacy lock request using public macOS tooling.
 - Safe Sunshine discovery/status, Web UI opening, and start/stop/restart using MacStream Host ownership metadata only.
 - SwiftUI Sunshine screen wired to local diagnostics, isolated config generation, Web UI opening, and owned process control.
 - SwiftUI operational dashboard with preflight CTA, first-run onboarding, dependency detection, Moonlight checklist, copyable pairing addresses, and support ZIP export.
@@ -45,7 +49,7 @@ Implemented now:
 - User LaunchAgent render/install/load/unload/remove without `sudo`, with plist and path validation.
 - `doctor --json`, `doctor --strict`, real log reading, zipped support bundle export, and soft reset of MacStream Host owned state.
 - Unsigned beta `.app` and optional drag-and-drop DMG packaging script with notices, build metadata, app icon, and SHA-256 checksum.
-- SwiftUI sidebar with Dashboard, Setup, Dependencies, Sunshine, Audio, Network, Moonlight, Diagnostics, and Settings.
+- SwiftUI sidebar with Remote Work, Setup, Components, Advanced Engines, Audio, Network, Moonlight, Diagnostics, and Settings.
 - Domain models for Sunshine, BlackHole, permissions, audio, network, health checks, and streaming quality profiles.
 - Unit tests for status rules, health checks, configuration validation, app state, settings, logs, LaunchAgent, reset, and test doubles.
 - Safe diagnostic scripts that do not install, delete, request `sudo`, or modify system settings.
@@ -57,6 +61,8 @@ Not implemented yet:
 - Automatic permission prompting or bypassing macOS privacy controls.
 - Native Moonlight pairing through a Sunshine API.
 - Driver installation.
+- Privileged helper for full driver lifecycle management.
+- Automatic host lock on session start before practical validation.
 - Signing, notarization, public release automation, or auto-update.
 
 ## System Requirements
@@ -110,6 +116,7 @@ src/
   MacStreamCore/
   MacStreamHostApp/
   macstreamctl/
+  macstream-agent/
 tests/
 scripts/
 docs/
@@ -144,11 +151,21 @@ The CLI doctor uses safe Sunshine discovery. It detects a `sunshine` binary, run
 Prepare the host for a real local Moonlight test:
 
 ```bash
-swift run macstreamctl preflight
-swift run macstreamctl preflight --start
+swift run macstreamctl remote-work prepare
+swift run macstreamctl remote-work start
+swift run macstreamctl remote-work status
 ```
 
-`preflight` writes the isolated Sunshine config and `apps.json`, validates Sunshine, BlackHole, permissions, network, logs, and pairing readiness. `--start` starts only a Sunshine process owned by MacStream Host. If Sunshine logs a runtime blocker such as missing Screen Recording permission, `doctor` reports it as a failing runtime check.
+`remote-work prepare` writes the isolated engine config and installs the MacStream user agent. `remote-work start` asks the agent to start only MacStream-owned engines and activate keep-awake. If the video engine logs a runtime blocker such as missing Screen Recording permission, `doctor` reports it as a failing runtime check.
+
+Manage the resident MacStream Agent:
+
+```bash
+swift run macstreamctl agent status
+swift run macstreamctl agent install
+swift run macstreamctl agent load
+swift run macstreamctl agent unload
+```
 
 Generate safe default Sunshine configuration:
 
@@ -174,7 +191,7 @@ Open the Sunshine Web UI:
 swift run macstreamctl webui
 ```
 
-Manage the user LaunchAgent:
+Manage the user LaunchAgent directly:
 
 ```bash
 swift run macstreamctl launchagent install
@@ -213,7 +230,7 @@ Use integrated dependency installation from the app:
 swift run MacStreamHostApp
 ```
 
-Open **Dependencies** and choose **Instalar dependências ausentes**. Sunshine is installed into the current user’s MacStream Host application support directory. BlackHole opens the verified official `.pkg` in Installer.app and may require administrator approval and a reboot.
+Open **Components** and choose **Instalar dependências ausentes**. The video engine is installed into the current user’s MacStream Host application support directory. The audio driver opens the verified official `.pkg` in Installer.app and may require administrator approval and a reboot.
 
 Create a local unsigned beta app bundle or DMG:
 
@@ -231,10 +248,10 @@ The DMG is unsigned until a Developer ID certificate is available. For a future 
 ## Roadmap
 
 1. Validate Sunshine launch arguments and Web UI behavior against a pinned upstream version.
-2. Run the first end-to-end manual acceptance test with Moonlight on a real client from the unsigned DMG.
-3. Capture beta feedback for permissions, audio route selection, LaunchAgent persistence, and Gatekeeper unsigned flow.
-4. Add signed and notarized release automation once Developer ID is available.
-5. Decide whether Intel Mac support is out of scope or only unvalidated.
+2. Validate `macstream-agent` across logout/login with Remote Work Mode start/stop.
+3. Run the first end-to-end manual acceptance test with Moonlight on a real client from the unsigned DMG.
+4. Capture beta feedback for permissions, audio route selection, host lock behavior, LaunchAgent persistence, and Gatekeeper unsigned flow.
+5. Add signed and notarized release automation once Developer ID is available.
 
 ## Contributing
 

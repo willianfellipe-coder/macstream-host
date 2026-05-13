@@ -26,6 +26,7 @@ public protocol DependencyInstalling {
 
 public protocol PermissionManaging {
     func currentStatus() async -> MacOSPermissionsStatus
+    func requestPermissions(_ permissions: [MacPermission]) async -> [PermissionRequestResult]
     func openSettings(for permission: MacPermission) async throws
 }
 
@@ -60,6 +61,43 @@ public protocol LaunchAgentManaging {
     func uninstallLaunchAgent() async throws
     func load() async throws
     func unload() async throws
+}
+
+public protocol AgentManaging {
+    var statusURL: URL { get }
+    var commandURL: URL { get }
+
+    func status() async -> MacStreamAgentStatus
+    func install() async throws
+    func load() async throws
+    func unload() async throws
+    func writeCommand(_ command: MacStreamAgentCommand) throws
+    func readLastReport() throws -> RemoteWorkSessionReport?
+    func writeReport(_ report: RemoteWorkSessionReport) throws
+}
+
+public protocol PowerAssertionManaging {
+    func currentStatus() async -> PowerAssertionStatus
+    func acquire(policy: PowerPolicy) async throws -> PowerAssertionStatus
+    func release() async throws -> PowerAssertionStatus
+}
+
+public protocol HostPrivacyManaging {
+    func currentStatus() async -> HostPrivacyStatus
+    func apply(policy: HostPrivacyPolicy) async
+    func lockHost() async throws -> HostPrivacyStatus
+}
+
+public protocol ManagedEngineManaging {
+    func status() async -> ManagedEngineStatus
+}
+
+public protocol RemoteWorkSessionManaging {
+    func prepare(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport
+    func start(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport
+    func stop() async throws -> RemoteWorkSessionReport
+    func status() async -> RemoteWorkSessionReport
+    func lockHostForPrivacy() async throws -> RemoteWorkSessionReport
 }
 
 public protocol ConfigurationManaging {

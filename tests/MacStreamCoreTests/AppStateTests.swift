@@ -148,4 +148,18 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.runtimeSettings.audioCaptureMode, .nativeSystemAudio)
         XCTAssertEqual(settingsManager.settings.logDirectoryPath, "/tmp/macstream-logs")
     }
+
+    @MainActor
+    func testRequestMacOSPermissionsRequestsOnlyPromptableAppPermissions() async {
+        let permissions = MockPermissionManager()
+        let appState = makeTestAppState(permissions: permissions)
+
+        await appState.requestMacOSPermissions()
+
+        XCTAssertEqual(
+            permissions.requestedPermissions,
+            [.microphone]
+        )
+        XCTAssertFalse(appState.lastPermissionRequestResults.isEmpty)
+    }
 }

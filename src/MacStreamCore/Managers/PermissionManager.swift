@@ -27,19 +27,26 @@ public protocol PermissionStatusProviding {
     func status(for permission: MacPermission) -> PermissionStatus
 }
 
+public protocol PermissionPrompting {
+    func requestPermission(_ permission: MacPermission) async -> Bool
+}
+
 public protocol PermissionSettingsOpening {
     func openSettings(for permission: MacPermission) throws
 }
 
 public final class DefaultPermissionManager: PermissionManaging {
     private let statusProvider: PermissionStatusProviding
+    private let prompter: PermissionPrompting
     private let settingsOpener: PermissionSettingsOpening
 
     public init(
         statusProvider: PermissionStatusProviding = SystemPermissionStatusProvider(),
+        prompter: PermissionPrompting = SystemPermissionPrompter(),
         settingsOpener: PermissionSettingsOpening = SystemSettingsPermissionOpener()
     ) {
         self.statusProvider = statusProvider
+        self.prompter = prompter
         self.settingsOpener = settingsOpener
     }
 
@@ -56,8 +63,60 @@ public final class DefaultPermissionManager: PermissionManaging {
         )
     }
 
+    public func requestPermissions(_ permissions: [MacPermission]) async -> [PermissionRequestResult] {
+        var results: [PermissionRequestResult] = []
+
+        for permission in permissions {
+            let before = statusProvider.status(for: permission)
+            let shouldPrompt = before != .granted
+            let promptSucceeded = shouldPrompt ? await prompter.requestPermission(permission) : true
+            let after = statusProvider.status(for: permission)
+            results.append(
+                PermissionRequestResult(
+                    id: permission,
+                    statusBefore: before,
+                    statusAfter: after,
+                    promptAttempted: shouldPrompt,
+                    detail: requestDetail(
+                        for: permission,
+                        statusBefore: before,
+                        statusAfter: after,
+                        promptSucceeded: promptSucceeded
+                    )
+                )
+            )
+        }
+
+        return results
+    }
+
     public func openSettings(for permission: MacPermission) async throws {
         try settingsOpener.openSettings(for: permission)
+    }
+
+    private func requestDetail(
+        for permission: MacPermission,
+        statusBefore: PermissionStatus,
+        statusAfter: PermissionStatus,
+        promptSucceeded: Bool
+    ) -> String {
+        if statusAfter == .granted {
+            return "\(permission.displayName) concedida."
+        }
+
+        if permission == .localNetwork {
+            return "Rede local precisa ser validada por teste de conexão; macOS não expõe prompt/status direto confiável."
+        }
+
+        if statusBefore == .denied || statusAfter == .denied {
+            return "\(permission.displayName) foi negada; abra Ajustes do Sistema para permitir manualmente."
+        }
+
+        if promptSucceeded == false {
+            return "\(permission.displayName) não foi concedida pelo prompt do macOS; abra Ajustes do Sistema."
+        }
+
+        return "\(permission.displayName) ainda precisa de validação nos Ajustes do Sistema."
     }
 
     private func detail(for permission: MacPermission, status: PermissionStatus) -> String {
@@ -91,6 +150,25 @@ public final class DefaultPermissionManager: PermissionManaging {
             default:
                 return "Acessibilidade é desejável para entrada em alguns apps, mas não bloqueia a fundação do MVP."
             }
+        }
+    }
+}
+
+public final class SystemPermissionPrompter: PermissionPrompting {
+    public init() {}
+
+    public func requestPermission(_ permission: MacPermission) async -> Bool {
+        switch permission {
+        case .screenRecording:
+            return CGRequestScreenCaptureAccess()
+        case .microphone:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        case .accessibility:
+            let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            let options = [promptKey: true] as CFDictionary
+            return AXIsProcessTrustedWithOptions(options)
+        case .localNetwork:
+            return false
         }
     }
 }
@@ -129,9 +207,7 @@ public final class SystemPermissionStatusProvider: PermissionStatusProviding {
     }
 
     private func accessibilityStatus() -> PermissionStatus {
-        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [promptKey: false] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options) ? .granted : .requiresValidation
+        AXIsProcessTrusted() ? .granted : .requiresValidation
     }
 }
 

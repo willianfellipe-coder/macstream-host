@@ -22,6 +22,12 @@ public final class AppState: ObservableObject {
     @Published public private(set) var completedMoonlightChecklistItems: Set<MoonlightChecklistItemID>
     @Published public private(set) var dependencyInstallProgress: DependencyInstallProgress?
     @Published public private(set) var lastDependencyInstallResult: DependencyInstallResult?
+    @Published public private(set) var remoteWorkSession: RemoteWorkSessionReport
+    @Published public private(set) var agentStatus: MacStreamAgentStatus
+    @Published public private(set) var managedEngineStatus: ManagedEngineStatus
+    @Published public private(set) var powerAssertionStatus: PowerAssertionStatus
+    @Published public private(set) var hostPrivacyStatus: HostPrivacyStatus
+    @Published public private(set) var lastPermissionRequestResults: [PermissionRequestResult]
 
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
@@ -35,6 +41,11 @@ public final class AppState: ObservableObject {
     public private(set) var logManager: LogManaging
     public private(set) var pairingGuide: MoonlightPairingGuiding
     public private(set) var healthCheckService: HealthCheckServicing
+    public private(set) var agentManager: AgentManaging
+    public private(set) var managedEngineManager: ManagedEngineManaging
+    public private(set) var powerAssertionManager: PowerAssertionManaging
+    public private(set) var hostPrivacyManager: HostPrivacyManaging
+    public private(set) var remoteWorkSessionManager: RemoteWorkSessionManaging
 
     public init(
         sunshineManager: SunshineManaging,
@@ -49,7 +60,12 @@ public final class AppState: ObservableObject {
         runtimeSettings: MacStreamHostSettings,
         logManager: LogManaging,
         pairingGuide: MoonlightPairingGuiding,
-        healthCheckService: HealthCheckServicing
+        healthCheckService: HealthCheckServicing,
+        agentManager: AgentManaging? = nil,
+        managedEngineManager: ManagedEngineManaging? = nil,
+        powerAssertionManager: PowerAssertionManaging? = nil,
+        hostPrivacyManager: HostPrivacyManaging? = nil,
+        remoteWorkSessionManager: RemoteWorkSessionManaging? = nil
     ) {
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
@@ -64,6 +80,37 @@ public final class AppState: ObservableObject {
         self.logManager = logManager
         self.pairingGuide = pairingGuide
         self.healthCheckService = healthCheckService
+        let fallbackAgentManager = agentManager ?? DefaultAgentManager(
+            launchAgentManager: launchAgentManager,
+            statusURL: runtimeSettings.agentStatusURL,
+            commandURL: runtimeSettings.agentCommandURL
+        )
+        let fallbackManagedEngineManager = managedEngineManager ?? DefaultManagedEngineManager(
+            sunshineManager: sunshineManager,
+            audioDeviceManager: audioDeviceManager,
+            networkDiagnosticsManager: networkDiagnosticsManager
+        )
+        let fallbackPowerAssertionManager = powerAssertionManager ?? DefaultPowerAssertionManager(
+            initialPolicy: runtimeSettings.powerPolicy
+        )
+        let fallbackHostPrivacyManager = hostPrivacyManager ?? DefaultHostPrivacyManager(
+            policy: runtimeSettings.hostPrivacyPolicy
+        )
+        self.agentManager = fallbackAgentManager
+        self.managedEngineManager = fallbackManagedEngineManager
+        self.powerAssertionManager = fallbackPowerAssertionManager
+        self.hostPrivacyManager = fallbackHostPrivacyManager
+        self.remoteWorkSessionManager = remoteWorkSessionManager ?? DefaultRemoteWorkSessionManager(
+            agentManager: fallbackAgentManager,
+            configurationManager: configurationManager,
+            sunshineManager: sunshineManager,
+            blackHoleManager: blackHoleManager,
+            permissionManager: permissionManager,
+            managedEngineManager: fallbackManagedEngineManager,
+            powerAssertionManager: fallbackPowerAssertionManager,
+            hostPrivacyManager: fallbackHostPrivacyManager,
+            settingsProvider: { runtimeSettings }
+        )
         self.dashboard = .initial
         self.setupChecklist = []
         self.healthCheckResult = HealthCheckResult(checks: [])
@@ -77,6 +124,12 @@ public final class AppState: ObservableObject {
         self.completedMoonlightChecklistItems = []
         self.dependencyInstallProgress = nil
         self.lastDependencyInstallResult = nil
+        self.remoteWorkSession = .initial
+        self.agentStatus = .initial
+        self.managedEngineStatus = .initial
+        self.powerAssertionStatus = .inactive
+        self.hostPrivacyStatus = .initial
+        self.lastPermissionRequestResults = []
     }
 
     public static func localDiagnostics(settingsManager: SettingsManaging = FileSettingsManager()) -> AppState {
@@ -96,7 +149,12 @@ public final class AppState: ObservableObject {
             runtimeSettings: settings,
             logManager: dependencies.log,
             pairingGuide: DefaultMoonlightPairingGuide(),
-            healthCheckService: dependencies.health
+            healthCheckService: dependencies.health,
+            agentManager: dependencies.agent,
+            managedEngineManager: dependencies.engine,
+            powerAssertionManager: dependencies.power,
+            hostPrivacyManager: dependencies.privacy,
+            remoteWorkSessionManager: dependencies.remoteWork
         )
     }
 
@@ -104,9 +162,9 @@ public final class AppState: ObservableObject {
         let audioDeviceProvider = CoreAudioDeviceProvider()
         let configuration = DefaultConfigurationManager(configDirectory: settings.configDirectoryURL)
         let binaryResolver = SettingsSunshineBinaryResolver(explicitPath: settings.sunshineBinaryPath)
-        let sunshineBinaryPath = binaryResolver.resolveBinary()?.path
-            ?? settings.sunshineBinaryPath
-            ?? "/opt/homebrew/bin/sunshine"
+        let agentExecutablePath = settings.agentExecutablePath
+            ?? DefaultAgentExecutableResolver().resolveExecutable()?.path
+            ?? "/Applications/MacStream Host.app/Contents/MacOS/macstream-agent"
         let sunshine = DefaultSunshineManager(
             binaryResolver: binaryResolver,
             configurationManager: configuration,
@@ -123,10 +181,33 @@ public final class AppState: ObservableObject {
         let log = DefaultLogManager(logDirectoryURL: settings.logDirectoryURL)
         let launchAgent = DefaultLaunchAgentManager(
             definition: LaunchAgentDefinition(
-                sunshineBinaryPath: sunshineBinaryPath,
-                sunshineConfigPath: settings.sunshineConfigURL.path,
+                executablePath: agentExecutablePath,
+                arguments: ["run"],
                 logDirectoryPath: settings.logDirectoryURL.path
             )
+        )
+        let agent = DefaultAgentManager(
+            launchAgentManager: launchAgent,
+            statusURL: settings.agentStatusURL,
+            commandURL: settings.agentCommandURL
+        )
+        let engine = DefaultManagedEngineManager(
+            sunshineManager: sunshine,
+            audioDeviceManager: audio,
+            networkDiagnosticsManager: network
+        )
+        let power = DefaultPowerAssertionManager(initialPolicy: settings.powerPolicy)
+        let privacy = DefaultHostPrivacyManager(policy: settings.hostPrivacyPolicy)
+        let remoteWork = DefaultRemoteWorkSessionManager(
+            agentManager: agent,
+            configurationManager: configuration,
+            sunshineManager: sunshine,
+            blackHoleManager: blackHole,
+            permissionManager: permissions,
+            managedEngineManager: engine,
+            powerAssertionManager: power,
+            hostPrivacyManager: privacy,
+            settingsProvider: { settings }
         )
         let health = DefaultHealthCheckService(
                 sunshineManager: sunshine,
@@ -135,7 +216,11 @@ public final class AppState: ObservableObject {
                 audioDeviceManager: audio,
                 networkDiagnosticsManager: network,
                 launchAgentManager: launchAgent,
-                logManager: log
+                logManager: log,
+                agentManager: agent,
+                powerAssertionManager: power,
+                hostPrivacyManager: privacy,
+                remoteWorkSessionManager: remoteWork
             )
 
         return RuntimeDependencies(
@@ -148,7 +233,12 @@ public final class AppState: ObservableObject {
             launchAgent: launchAgent,
             configuration: configuration,
             log: log,
-            health: health
+            health: health,
+            agent: agent,
+            engine: engine,
+            power: power,
+            privacy: privacy,
+            remoteWork: remoteWork
         )
     }
 
@@ -162,6 +252,13 @@ public final class AppState: ObservableObject {
             sunshine: sunshine,
             blackHole: blackHole
         )
+        let agent = await agentManager.status()
+        let engine = await managedEngineManager.status()
+        let localPower = await powerAssertionManager.currentStatus()
+        let localPrivacy = await hostPrivacyManager.currentStatus()
+        let remoteWork = await remoteWorkSessionManager.status()
+        let effectivePower = remoteWork.powerStatus.isActive ? remoteWork.powerStatus : localPower
+        let effectivePrivacy = remoteWork.agentStatus.isRunning ? remoteWork.hostPrivacyStatus : localPrivacy
 
         dashboard = DashboardSnapshot(
             sunshineStatus: sunshine,
@@ -171,6 +268,11 @@ public final class AppState: ObservableObject {
             recommendedNextStep: health.recommendedNextStep
         )
         dependencyStatuses = dependencies
+        agentStatus = agent
+        managedEngineStatus = engine
+        powerAssertionStatus = effectivePower
+        hostPrivacyStatus = effectivePrivacy
+        remoteWorkSession = remoteWork
         setupChecklist = makeSetupChecklist(
             sunshine: sunshine,
             blackHole: blackHole,
@@ -243,6 +345,51 @@ public final class AppState: ObservableObject {
         }
     }
 
+    public func prepareRemoteWorkMode() async {
+        await runRemoteWorkOperation {
+            try await remoteWorkSessionManager.prepare(overwriteConfig: false)
+        }
+    }
+
+    public func startRemoteWorkMode() async {
+        await runRemoteWorkOperation {
+            try await remoteWorkSessionManager.start(overwriteConfig: false)
+        }
+    }
+
+    public func stopRemoteWorkMode() async {
+        await runRemoteWorkOperation {
+            try await remoteWorkSessionManager.stop()
+        }
+    }
+
+    public func refreshAgentStatus() async {
+        agentStatus = await agentManager.status()
+        remoteWorkSession = await remoteWorkSessionManager.status()
+    }
+
+    public func enablePowerPolicy(_ policy: PowerPolicy) async {
+        var settings = runtimeSettings
+        settings.powerPolicy = policy
+        await saveSettings(settings, successMessage: "Politica de energia salva.")
+    }
+
+    public func updateHostPrivacyPolicy(_ policy: HostPrivacyPolicy) async {
+        var settings = runtimeSettings
+        settings.hostPrivacyPolicy = policy
+        await saveSettings(settings, successMessage: "Politica de privacidade salva.")
+    }
+
+    public func lockHostForPrivacy() async {
+        await runRemoteWorkOperation {
+            try await remoteWorkSessionManager.lockHostForPrivacy()
+        }
+    }
+
+    public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {
+        await exportSupportBundleZip()
+    }
+
     public func createDefaultSunshineConfiguration() async {
         await runSunshineOperation(successMessage: "Configuração padrão do Sunshine gerada.") {
             _ = try configurationManager.writeDefaultFiles(overwrite: false, audioSink: runtimeSettings.audioSink)
@@ -277,6 +424,28 @@ public final class AppState: ObservableObject {
         await runOperation(successMessage: "Ajustes de \(permission.displayName) abertos.") {
             try await permissionManager.openSettings(for: permission)
         }
+    }
+
+    public func requestMacOSPermissions() async {
+        let permissionsToRequest: [MacPermission] = [
+            .microphone
+        ]
+        let results = await permissionManager.requestPermissions(permissionsToRequest)
+        lastPermissionRequestResults = results
+
+        if results.allSatisfy({ $0.statusAfter == .granted }) {
+            lastOperationMessage = "Permissões solicitadas. Gravação de Tela da engine será validada pelo teste real."
+        } else {
+            let pending = results
+                .filter { $0.statusAfter != .granted }
+                .map { $0.id.displayName }
+                .joined(separator: ", ")
+            lastOperationMessage = pending.isEmpty
+                ? "Permissões solicitadas."
+                : "Permissões ainda pendentes: \(pending). Abra Ajustes do Sistema se o macOS não exibiu prompt."
+        }
+
+        await refresh()
     }
 
     public func installLaunchAgent() async {
@@ -317,9 +486,12 @@ public final class AppState: ObservableObject {
     ) async {
         let settings = MacStreamHostSettings(
             sunshineBinaryPath: sunshineBinaryPath?.isEmpty == true ? nil : sunshineBinaryPath,
+            agentExecutablePath: runtimeSettings.agentExecutablePath,
             configDirectoryPath: configDirectoryPath,
             logDirectoryPath: logDirectoryPath,
-            audioCaptureMode: audioCaptureMode
+            audioCaptureMode: audioCaptureMode,
+            powerPolicy: runtimeSettings.powerPolicy,
+            hostPrivacyPolicy: runtimeSettings.hostPrivacyPolicy
         )
 
         await saveSettings(settings, successMessage: "Preferências salvas.")
@@ -334,6 +506,8 @@ public final class AppState: ObservableObject {
             audioDevices: await audioDeviceManager.listAudioDevices(),
             preferredAudioMode: await audioDeviceManager.preferredCaptureMode(),
             launchAgentStatus: await launchAgentManager.status(),
+            agentStatus: await agentManager.status(),
+            remoteWorkSession: await remoteWorkSessionManager.status(),
             dependencies: dependencyStatuses,
             buildInfo: .current
         )
@@ -521,6 +695,22 @@ public final class AppState: ObservableObject {
         await refresh()
     }
 
+    private func runRemoteWorkOperation(_ operation: () async throws -> RemoteWorkSessionReport) async {
+        do {
+            let report = try await operation()
+            remoteWorkSession = report
+            agentStatus = report.agentStatus
+            managedEngineStatus = report.engineStatus
+            powerAssertionStatus = report.powerStatus
+            hostPrivacyStatus = report.hostPrivacyStatus
+            lastOperationMessage = report.nextStep
+        } catch {
+            lastOperationMessage = error.localizedDescription
+        }
+
+        await refresh()
+    }
+
     private func saveSettings(_ settings: MacStreamHostSettings, successMessage: String) async {
         do {
             let normalized = settings.normalized()
@@ -585,10 +775,6 @@ public final class AppState: ObservableObject {
             return .needsDependency
         }
 
-        if permissions.aggregateStatus == .fail || permissions.criticalPermissionsSatisfied == false {
-            return .needsPermission
-        }
-
         if health.status == .failing {
             return .blocked
         }
@@ -616,7 +802,7 @@ public final class AppState: ObservableObject {
             OnboardingStep(id: .sunshine, title: "Detectar Sunshine", state: stepState(for: dependencyStatus(.sunshine, dependencies)), detail: dependencies.first(where: { $0.id == .sunshine })?.detail ?? "Validar Sunshine."),
             OnboardingStep(id: .blackHole, title: "Detectar BlackHole", state: stepState(for: dependencyStatus(.blackHole, dependencies)), detail: dependencies.first(where: { $0.id == .blackHole })?.detail ?? "Validar BlackHole."),
             OnboardingStep(id: .audio, title: "Configurar áudio", state: stepState(for: audioStatus), detail: audioStatus == .pass ? "Rota de áudio validada." : "Escolha captura nativa ou BlackHole 2ch."),
-            OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.aggregateStatus), detail: dashboard.permissionsStatus.criticalPermissionsSatisfied ? "Permissões críticas OK." : "Abra Ajustes do Sistema para permissões pendentes."),
+            OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.runtimeGuidanceStatus), detail: dashboard.permissionsStatus.runtimeGuidanceStatus == .pass ? "Permissões conhecidas OK." : "Permissões do app são diagnóstico; erros reais de captura aparecem no teste da engine."),
             OnboardingStep(id: .configuration, title: "Gerar configuração", state: hasConfig ? .passed : .pending, detail: runtimeSettings.sunshineConfigURL.path),
             OnboardingStep(id: .startSunshine, title: "Iniciar Sunshine", state: dashboard.sunshineStatus.state == .running ? .passed : .pending, detail: dashboard.sunshineStatus.state.displayName),
             OnboardingStep(id: .webUI, title: "Abrir Web UI", state: dashboard.sunshineStatus.webUIReachable ? .passed : .pending, detail: "https://localhost:47990"),
@@ -656,6 +842,11 @@ public final class AppState: ObservableObject {
         launchAgentManager = dependencies.launchAgent
         configurationManager = dependencies.configuration
         logManager = dependencies.log
+        agentManager = dependencies.agent
+        managedEngineManager = dependencies.engine
+        powerAssertionManager = dependencies.power
+        hostPrivacyManager = dependencies.privacy
+        remoteWorkSessionManager = dependencies.remoteWork
         healthCheckService = dependencies.health
     }
 
@@ -678,8 +869,8 @@ public final class AppState: ObservableObject {
             SetupChecklistItem(
                 id: .permissions,
                 title: "Verificar permissões",
-                status: permissions.aggregateStatus,
-                detail: "Gravação de tela, microfone e rede local precisam de validação guiada."
+                status: permissions.runtimeGuidanceStatus,
+                detail: "Permissões do app não bloqueiam o start; a captura real é validada pelos logs da engine."
             ),
             SetupChecklistItem(
                 id: .sunshineInstalled,
@@ -726,4 +917,9 @@ private struct RuntimeDependencies {
     var configuration: ConfigurationManaging
     var log: LogManaging
     var health: HealthCheckServicing
+    var agent: AgentManaging
+    var engine: ManagedEngineManaging
+    var power: PowerAssertionManaging
+    var privacy: HostPrivacyManaging
+    var remoteWork: RemoteWorkSessionManaging
 }

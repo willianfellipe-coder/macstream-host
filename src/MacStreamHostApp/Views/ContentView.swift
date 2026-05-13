@@ -18,10 +18,10 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .dashboard: return "Dashboard"
+        case .dashboard: return "Remote Work"
         case .setup: return "Setup"
-        case .dependencies: return "Dependencies"
-        case .sunshine: return "Sunshine"
+        case .dependencies: return "Components"
+        case .sunshine: return "Advanced Engines"
         case .audio: return "Audio"
         case .network: return "Network"
         case .moonlight: return "Moonlight"
@@ -85,40 +85,53 @@ struct DashboardView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Dashboard", subtitle: "Operação principal para preparar, iniciar e validar um teste real com Moonlight.") {
-            OperationalStateBanner(state: appState.operationalState, nextStep: appState.dashboard.recommendedNextStep)
+        PageContainer(title: "Remote Work", subtitle: "Prepare este Mac para uso remoto produtivo a partir do iPad ou outro cliente Moonlight.") {
+            RemoteWorkBanner(report: appState.remoteWorkSession)
 
             GroupBox("Ações principais") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 10) {
                         Button {
-                            Task {
-                                await appState.runPreflight(
-                                    startAfterValidation: true,
-                                    overwriteConfig: false
-                                )
-                            }
+                            Task { await appState.prepareRemoteWorkMode() }
                         } label: {
-                            Label("Preparar para teste", systemImage: "wand.and.stars")
+                            Label("Preparar MacStream", systemImage: "wand.and.stars")
                         }
 
                         Button {
-                            Task { await appState.startSunshine() }
+                            Task { await appState.requestMacOSPermissions() }
                         } label: {
-                            Label("Iniciar Sunshine", systemImage: "play.fill")
+                            Label("Permissões", systemImage: "hand.raised")
                         }
-                        .disabled(appState.dashboard.sunshineStatus.state == .running || appState.dashboard.sunshineStatus.state == .notInstalled)
+
+                        Button {
+                            Task { await appState.startRemoteWorkMode() }
+                        } label: {
+                            Label("Iniciar modo remoto", systemImage: "play.fill")
+                        }
+                        .disabled(appState.remoteWorkSession.state == .running)
 
                         Button {
                             Task { await appState.openSunshineWebUI() }
                         } label: {
-                            Label("Abrir Web UI", systemImage: "safari")
+                            Label("Parear dispositivo", systemImage: "ipad.and.arrow.forward")
                         }
 
                         Button {
-                            Task { _ = await appState.exportSupportBundleZip() }
+                            Task { await appState.lockHostForPrivacy() }
                         } label: {
-                            Label("Exportar diagnóstico", systemImage: "archivebox")
+                            Label("Bloquear host", systemImage: "lock.display")
+                        }
+
+                        Button {
+                            Task { await appState.stopRemoteWorkMode() }
+                        } label: {
+                            Label("Parar", systemImage: "stop.fill")
+                        }
+
+                        Button {
+                            Task { _ = await appState.exportRemoteWorkSupportBundle() }
+                        } label: {
+                            Label("Diagnóstico", systemImage: "archivebox")
                         }
                     }
 
@@ -133,31 +146,47 @@ struct DashboardView: View {
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
                 StatusPanel(
-                    title: "Sunshine",
-                    value: appState.dashboard.sunshineStatus.state.displayName,
-                    detail: appState.dashboard.sunshineStatus.webUIReachable ? "Web UI acessível" : "Web UI ainda não validada",
-                    status: appState.dashboard.sunshineStatus.state.checkStatus
+                    title: "Modo remoto",
+                    value: appState.remoteWorkSession.state.displayName,
+                    detail: appState.remoteWorkSession.nextStep,
+                    status: appState.remoteWorkSession.state.checkStatus
                 )
 
                 StatusPanel(
-                    title: "BlackHole",
-                    value: appState.dashboard.blackHoleStatus.displayName,
-                    detail: "Fallback de áudio oficial para o MVP",
-                    status: appState.dashboard.blackHoleStatus.checkStatus
+                    title: "Agente residente",
+                    value: appState.agentStatus.isRunning ? "Ativo" : appState.agentStatus.launchAgentStatus.displayName,
+                    detail: appState.agentStatus.detail,
+                    status: appState.agentStatus.checkStatus
+                )
+
+                StatusPanel(
+                    title: "Engines",
+                    value: appState.managedEngineStatus.aggregateStatus.displayName,
+                    detail: "Video, audio e rede gerenciados pelo MacStream",
+                    status: appState.managedEngineStatus.aggregateStatus
                 )
 
                 StatusPanel(
                     title: "Permissões macOS",
-                    value: appState.dashboard.permissionsStatus.aggregateStatus.displayName,
-                    detail: appState.dashboard.permissionsStatus.criticalPermissionsSatisfied ? "Críticas OK" : "Requer validação guiada",
-                    status: appState.dashboard.permissionsStatus.aggregateStatus
+                    value: appState.dashboard.permissionsStatus.runtimeGuidanceStatus.displayName,
+                    detail: appState.dashboard.permissionsStatus.runtimeGuidanceStatus == .pass
+                        ? "Permissões conhecidas OK"
+                        : "Diagnóstico não bloqueante; a captura real é validada pela engine.",
+                    status: appState.dashboard.permissionsStatus.runtimeGuidanceStatus
                 )
 
                 StatusPanel(
-                    title: "Rede",
-                    value: appState.dashboard.networkStatus.aggregateStatus.displayName,
-                    detail: appState.dashboard.networkStatus.localAddresses.first ?? "Sem IP local detectado",
-                    status: appState.dashboard.networkStatus.aggregateStatus
+                    title: "Energia",
+                    value: appState.powerAssertionStatus.isActive ? "Keep-awake ativo" : "Aguardando sessão",
+                    detail: appState.powerAssertionStatus.detail,
+                    status: appState.powerAssertionStatus.checkStatus
+                )
+
+                StatusPanel(
+                    title: "Privacidade",
+                    value: appState.hostPrivacyStatus.lastAction.rawValue,
+                    detail: appState.hostPrivacyStatus.detail,
+                    status: appState.hostPrivacyStatus.checkStatus
                 )
             }
 
@@ -252,6 +281,15 @@ struct SetupView: View {
 
             GroupBox("Permissões macOS") {
                 VStack(spacing: 10) {
+                    HStack {
+                        Button {
+                            Task { await appState.requestMacOSPermissions() }
+                        } label: {
+                            Label("Solicitar permissões", systemImage: "hand.raised")
+                        }
+                        Spacer()
+                    }
+
                     ForEach(appState.dashboard.permissionsStatus.checks) { permission in
                         HStack(alignment: .top, spacing: 12) {
                             StatusIcon(status: permission.status.checkStatus)
@@ -273,6 +311,16 @@ struct SetupView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                     }
+
+                    if !appState.lastPermissionRequestResults.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(appState.lastPermissionRequestResults) { result in
+                                Label(result.detail, systemImage: result.statusAfter == .granted ? "checkmark.circle" : "exclamationmark.triangle")
+                                    .foregroundStyle(result.statusAfter == .granted ? .green : .orange)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
@@ -283,7 +331,7 @@ struct DependenciesView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Dependencies", subtitle: "Detecção real de Sunshine, BlackHole e orientação para o cliente Moonlight.") {
+        PageContainer(title: "Components", subtitle: "Componentes gerenciados pelo MacStream para video, audio e pareamento.") {
             VStack(spacing: 12) {
                 ForEach(appState.dependencyStatuses) { dependency in
                     DependencyRow(dependency: dependency)
@@ -349,9 +397,9 @@ struct DependenciesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox("Configurar Sunshine manualmente") {
+            GroupBox("Configurar engine de video manualmente") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Se o Sunshine não estiver no PATH padrão, informe o caminho do binário em Settings e revalide.")
+                    Text("Se a engine de video não estiver no PATH padrão, informe o caminho do binário em Settings e revalide.")
                         .foregroundStyle(.secondary)
                     HStack {
                         Text(appState.runtimeSettings.sunshineBinaryPath ?? "Nenhum caminho manual configurado.")
@@ -370,9 +418,9 @@ struct DependenciesView: View {
 
             GroupBox("Política de instalação") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Sunshine e BlackHole não são empacotados nesta beta.", systemImage: "shippingbox")
-                    Label("Sunshine é baixado de release upstream fixado e instalado em diretório gerenciado pelo usuário.", systemImage: "checkmark.shield")
-                    Label("BlackHole é baixado de URL oficial, verificado por checksum e aberto no Installer.app.", systemImage: "safari")
+                    Label("Componentes upstream independentes aparecem aqui para compliance e suporte.", systemImage: "shippingbox")
+                    Label("A engine de video é baixada de release upstream fixado e instalada em diretório gerenciado pelo usuário.", systemImage: "checkmark.shield")
+                    Label("O driver de audio é baixado de URL oficial, verificado por checksum e aberto no Installer.app.", systemImage: "safari")
                     Label("Portas de firewall não são alteradas automaticamente.", systemImage: "lock.shield")
                 }
                 .foregroundStyle(.secondary)
@@ -404,9 +452,9 @@ struct SunshineView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Sunshine", subtitle: "Controle seguro do runtime Sunshine sem esconder a Web UI avançada.") {
+        PageContainer(title: "Advanced Engines", subtitle: "Diagnóstico técnico das engines internas controladas pelo MacStream.") {
             StatusPanel(
-                title: "Servidor",
+                title: "Engine de video",
                 value: appState.dashboard.sunshineStatus.state.displayName,
                 detail: sunshineStatusDetail,
                 status: appState.dashboard.sunshineStatus.state.checkStatus
@@ -474,7 +522,7 @@ struct SunshineView: View {
                     Text(appState.configurationManager.configDirectory.path)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
-                    Text("O app usa esse diretório para evitar conflito com uma instalação Sunshine existente.")
+                    Text("O app usa esse diretório para evitar conflito com uma instalação externa existente.")
                         .foregroundStyle(.secondary)
                     Text("Logs: \(appState.runtimeSettings.logDirectoryPath)")
                         .font(.system(.body, design: .monospaced))
@@ -556,9 +604,9 @@ struct AudioView: View {
     @State private var routeStatus: CheckStatus = .unknown
 
     var body: some View {
-        PageContainer(title: "Audio", subtitle: "Dispositivos CoreAudio reais, rota preferida e configuração Sunshine isolada.") {
+        PageContainer(title: "Audio", subtitle: "Dispositivos CoreAudio reais, rota preferida e configuração isolada do MacStream.") {
             StatusPanel(
-                title: "BlackHole 2ch",
+                title: "Rota de audio MacStream",
                 value: appState.dashboard.blackHoleStatus.displayName,
                 detail: blackHoleDetail,
                 status: appState.dashboard.blackHoleStatus.checkStatus
@@ -931,7 +979,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox("LaunchAgent") {
+            GroupBox("MacStream Agent") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Status atual: \(launchAgentStatusText(appState.healthCheckResult.checks.first(where: { $0.id == .launchAgent })?.status ?? .unknown))")
                         .font(.headline)
@@ -960,7 +1008,23 @@ struct SettingsView: View {
                             Label("Remover", systemImage: "trash")
                         }
                     }
-                    Text("Essas ações operam apenas o LaunchAgent `com.macstream.host.sunshine` do usuário atual.")
+                    Text("Essas ações operam apenas o LaunchAgent `com.macstream.host.agent` do usuário atual.")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Modo remoto") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Estado: \(appState.remoteWorkSession.state.displayName)")
+                        .font(.headline)
+                    HStack {
+                        Toggle("Impedir sleep do sistema", isOn: powerPreventSleepBinding)
+                        Toggle("Manter display acordado", isOn: powerDisplayAwakeBinding)
+                    }
+                    Toggle("Oferecer bloqueio de tela ao iniciar", isOn: hostLockOfferBinding)
+                    Toggle("Permitir bloqueio manual do host", isOn: hostLockManualBinding)
+                    Text("O bloqueio do host é experimental e deve ser validado no teste prático antes de virar padrão.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1057,6 +1121,50 @@ struct SettingsView: View {
         status.displayName
     }
 
+    private var powerPreventSleepBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.powerPolicy.preventSystemSleep },
+            set: { value in
+                var policy = appState.runtimeSettings.powerPolicy
+                policy.preventSystemSleep = value
+                Task { await appState.enablePowerPolicy(policy) }
+            }
+        )
+    }
+
+    private var powerDisplayAwakeBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.powerPolicy.keepDisplayAwake },
+            set: { value in
+                var policy = appState.runtimeSettings.powerPolicy
+                policy.keepDisplayAwake = value
+                Task { await appState.enablePowerPolicy(policy) }
+            }
+        )
+    }
+
+    private var hostLockOfferBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.offerLockOnSessionStart },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.offerLockOnSessionStart = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
+    private var hostLockManualBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.allowManualLock },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.allowManualLock = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
     private func runConfirmedAction(_ confirmation: SettingsConfirmation) async {
         switch confirmation {
         case .launchAgent(.install):
@@ -1098,13 +1206,13 @@ struct SettingsView: View {
             case .launchAgent(.install):
                 return "O app vai gravar um plist validado em ~/Library/LaunchAgents para o usuário atual. Nenhuma senha de administrador será solicitada."
             case .launchAgent(.load):
-                return "O app vai carregar o LaunchAgent no domínio do usuário atual usando launchctl. Isso pode iniciar o Sunshine com a configuração isolada."
+                return "O app vai carregar o MacStream Agent no domínio do usuário atual usando launchctl."
             case .launchAgent(.unload):
-                return "O app vai descarregar apenas o LaunchAgent com o label com.macstream.host.sunshine."
+                return "O app vai descarregar apenas o LaunchAgent com o label com.macstream.host.agent."
             case .launchAgent(.remove):
-                return "O app vai remover apenas o plist com.macstream.host.sunshine.plist criado pelo MacStream Host."
+                return "O app vai remover apenas o plist com.macstream.host.agent.plist criado pelo MacStream Host."
             case .softReset:
-                return "O app vai parar somente o Sunshine owned pelo MacStream Host, remover o LaunchAgent do app e arquivar a configuração isolada."
+                return "O app vai parar somente a engine owned pelo MacStream Host, remover o LaunchAgent do app e arquivar a configuração isolada."
             }
         }
 
@@ -1132,6 +1240,33 @@ struct OperationalStateBanner: View {
                 Text(nextStep)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+    }
+}
+
+struct RemoteWorkBanner: View {
+    let report: RemoteWorkSessionReport
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            StatusIcon(status: report.state.checkStatus)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(report.state.displayName)
+                    .font(.title3.weight(.semibold))
+                Text(report.nextStep)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !report.blockers.isEmpty {
+                    Text(report.blockers.joined(separator: " "))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
         }

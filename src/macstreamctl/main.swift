@@ -23,6 +23,10 @@ struct MacStreamCTL {
             await preflight(arguments: commandArguments)
         case "launchagent":
             await launchAgent(arguments: commandArguments)
+        case "agent":
+            await agent(arguments: commandArguments)
+        case "remote-work":
+            await remoteWork(arguments: commandArguments)
         case "start":
             await controlSunshine(action: .start, arguments: commandArguments)
         case "stop":
@@ -51,7 +55,7 @@ struct MacStreamCTL {
             let report = await state.diagnosticsReport()
             printJSON(report)
             let status = await state.healthCheckResult.status
-            if options.strict && status != .pass {
+            if options.strict && status == .failing {
                 Foundation.exit(1)
             }
             return
@@ -69,7 +73,7 @@ struct MacStreamCTL {
         print("Result: \(status.rawValue.uppercased())")
         print("Next action: \(await state.healthCheckResult.recommendedNextStep)")
 
-        if options.strict && status != .pass {
+        if options.strict && status == .failing {
             Foundation.exit(1)
         }
     }
@@ -192,12 +196,15 @@ struct MacStreamCTL {
         }
 
         let dashboard = await state.dashboard
-        print("Sunshine: \(dashboard.sunshineStatus.state.displayName)")
+        let remoteWork = await state.remoteWorkSession
+        print("Remote Work Mode: \(remoteWork.state.displayName)")
+        print("MacStream Agent: \(remoteWork.agentStatus.isRunning ? "running" : remoteWork.agentStatus.launchAgentStatus.displayName)")
+        print("Video engine: \(dashboard.sunshineStatus.state.displayName)")
         if let binaryPath = dashboard.sunshineStatus.binaryPath {
-            print("Sunshine binary: \(binaryPath)")
+            print("Video engine binary: \(binaryPath)")
         }
-        print("Sunshine Web UI: \(dashboard.sunshineStatus.webUIReachable ? "reachable" : "not reachable")")
-        print("BlackHole: \(dashboard.blackHoleStatus.displayName)")
+        print("Pairing interface: \(dashboard.sunshineStatus.webUIReachable ? "reachable" : "not reachable")")
+        print("Managed audio route: \(dashboard.blackHoleStatus.displayName)")
         let audioDevices = await state.audioDeviceManager.listAudioDevices()
         let preferredAudioMode = await state.audioDeviceManager.preferredCaptureMode()
         print("Audio devices: \(audioDevices.count)")
@@ -216,6 +223,8 @@ struct MacStreamCTL {
         }
         let launchAgentStatus = await state.launchAgentManager.status()
         print("LaunchAgent: \(launchAgentStatus.displayName)")
+        print("Power: \(remoteWork.powerStatus.detail)")
+        print("Host privacy: \(remoteWork.hostPrivacyStatus.detail)")
     }
 
     private static func launchAgent(arguments: [String]) async {
@@ -282,6 +291,102 @@ struct MacStreamCTL {
             }
         default:
             print("Unknown launchagent action: \(options.action)")
+            Foundation.exit(1)
+        }
+    }
+
+    private static func agent(arguments: [String]) async {
+        let options = parseAgentOptions(arguments)
+        let state = await makeAppState(options: options.runtimeOptions)
+        let manager = await state.agentManager
+
+        switch options.action {
+        case "status":
+            let status = await manager.status()
+            if options.runtimeOptions.json {
+                printJSON(status)
+            } else {
+                print("MacStream Agent: \(status.isRunning ? "running" : status.launchAgentStatus.displayName)")
+                print("State: \(status.statePath ?? manager.statusURL.path)")
+                if let heartbeat = status.lastHeartbeat {
+                    print("Heartbeat: \(heartbeat)")
+                }
+            }
+        case "install":
+            do {
+                try await manager.install()
+                print("MacStream Agent installed.")
+            } catch {
+                print("Agent install failed: \(error.localizedDescription)")
+                Foundation.exit(1)
+            }
+        case "load":
+            do {
+                try await manager.load()
+                print("MacStream Agent loaded.")
+            } catch {
+                print("Agent load failed: \(error.localizedDescription)")
+                Foundation.exit(1)
+            }
+        case "unload":
+            do {
+                try await manager.unload()
+                print("MacStream Agent unloaded.")
+            } catch {
+                print("Agent unload failed: \(error.localizedDescription)")
+                Foundation.exit(1)
+            }
+        default:
+            print("Unknown agent action: \(options.action)")
+            Foundation.exit(1)
+        }
+    }
+
+    private static func remoteWork(arguments: [String]) async {
+        let options = parseAgentOptions(arguments)
+        let state = await makeAppState(options: options.runtimeOptions)
+
+        do {
+            let report: RemoteWorkSessionReport
+            switch options.action {
+            case "prepare":
+                report = try await state.remoteWorkSessionManager.prepare(overwriteConfig: options.runtimeOptions.overwrite)
+            case "start":
+                report = try await state.remoteWorkSessionManager.start(overwriteConfig: options.runtimeOptions.overwrite)
+            case "stop":
+                report = try await state.remoteWorkSessionManager.stop()
+            case "lock":
+                report = try await state.remoteWorkSessionManager.lockHostForPrivacy()
+            case "status":
+                report = await state.remoteWorkSessionManager.status()
+            default:
+                print("Unknown remote-work action: \(options.action)")
+                Foundation.exit(1)
+            }
+
+            if options.runtimeOptions.json {
+                printJSON(report)
+            } else {
+                print("Remote Work Mode: \(report.state.displayName)")
+                print("Agent: \(report.agentStatus.isRunning ? "running" : report.agentStatus.launchAgentStatus.displayName)")
+                print("Power: \(report.powerStatus.detail)")
+                print("Privacy: \(report.hostPrivacyStatus.detail)")
+                if !report.blockers.isEmpty {
+                    print("Blockers:")
+                    for blocker in report.blockers {
+                        print("- \(blocker)")
+                    }
+                }
+                if !report.warnings.isEmpty {
+                    print("Warnings:")
+                    for warning in report.warnings {
+                        print("- \(warning)")
+                    }
+                }
+                print("Next action: \(report.nextStep)")
+            }
+        } catch {
+            print("Remote Work command failed: \(error.localizedDescription)")
             Foundation.exit(1)
         }
     }
@@ -424,7 +529,9 @@ struct MacStreamCTL {
           status      Print dashboard status with safe Sunshine discovery.
           configure   Write safe default sunshine.conf and apps.json.
           preflight   Write config, validate runtime state, and optionally start Sunshine.
-          launchagent Generate or inspect a safe LaunchAgent draft.
+          launchagent Generate or inspect the MacStream Agent LaunchAgent.
+          agent       Install, load, unload, or inspect the resident MacStream Agent.
+          remote-work Prepare, start, stop, lock, or inspect Remote Work Mode.
           start       Start Sunshine only when no external Sunshine is running.
           stop        Stop only a Sunshine process owned by MacStream Host.
           restart     Restart only through MacStream Host ownership.
@@ -438,6 +545,7 @@ struct MacStreamCTL {
           --json                 Print JSON for doctor/status/logs/reset.
           --strict               Fail doctor/preflight when blockers remain.
           --sunshine-binary PATH Override Sunshine binary path.
+          --agent-binary PATH    Override MacStream Agent binary path.
           --config-dir PATH      Override config directory.
           --log-dir PATH         Override log directory.
           --native-audio         Prefer native macOS audio capture.
@@ -463,11 +571,16 @@ struct MacStreamCTL {
           launchagent uninstall
 
         LaunchAgent options:
-          --sunshine-binary PATH   Override Sunshine binary path in plist.
-          --config PATH            Override Sunshine config path in plist.
+          --agent-binary PATH      Override MacStream Agent binary path in plist.
           --log-dir PATH           Override Sunshine log directory in plist.
           --output PATH            Write draft plist to this path.
           --overwrite              Backup and replace existing draft plist.
+
+        Agent commands:
+          agent status|install|load|unload
+
+        Remote Work commands:
+          remote-work status|prepare|start|stop|lock
         """)
     }
 
@@ -525,16 +638,14 @@ struct MacStreamCTL {
 
     private static func makeLaunchAgentManager(options: LaunchAgentCLIOptions) -> DefaultLaunchAgentManager {
         let settings = makeSettings(options: options.runtimeOptions)
-        let resolver = SettingsSunshineBinaryResolver(explicitPath: settings.sunshineBinaryPath)
-        let sunshineBinaryPath = options.sunshineBinaryPath
-            ?? resolver.resolveBinary()?.path
-            ?? settings.sunshineBinaryPath
-            ?? "/opt/homebrew/bin/sunshine"
-        let configPath = options.configPath ?? settings.sunshineConfigURL.path
+        let agentExecutablePath = options.agentExecutablePath
+            ?? settings.agentExecutablePath
+            ?? DefaultAgentExecutableResolver().resolveExecutable()?.path
+            ?? "/Applications/MacStream Host.app/Contents/MacOS/macstream-agent"
         let logDirectory = options.logDirectoryPath ?? settings.logDirectoryURL.path
         let definition = LaunchAgentDefinition(
-            sunshineBinaryPath: expandTilde(sunshineBinaryPath),
-            sunshineConfigPath: expandTilde(configPath),
+            executablePath: expandTilde(agentExecutablePath),
+            arguments: ["run"],
             logDirectoryPath: expandTilde(logDirectory)
         )
 
@@ -568,14 +679,21 @@ struct MacStreamCTL {
                     print("Missing value for --sunshine-binary")
                     Foundation.exit(1)
                 }
-                options.sunshineBinaryPath = arguments[index + 1]
+                options.agentExecutablePath = arguments[index + 1]
+                index += 1
+            case "--agent-binary":
+                guard index + 1 < arguments.count else {
+                    print("Missing value for --agent-binary")
+                    Foundation.exit(1)
+                }
+                options.agentExecutablePath = arguments[index + 1]
                 index += 1
             case "--config":
                 guard index + 1 < arguments.count else {
                     print("Missing value for --config")
                     Foundation.exit(1)
                 }
-                options.configPath = arguments[index + 1]
+                print("--config is ignored for the MacStream Agent LaunchAgent.")
                 index += 1
             case "--log-dir":
                 guard index + 1 < arguments.count else {
@@ -606,6 +724,20 @@ struct MacStreamCTL {
             index += 1
         }
 
+        return options
+    }
+
+    private static func parseAgentOptions(_ arguments: [String]) -> AgentCLIOptions {
+        var options = AgentCLIOptions()
+        var index = 0
+
+        if let first = arguments.first, !first.hasPrefix("--") {
+            options.action = first
+            index = 1
+        }
+
+        let runtimeArguments = Array(arguments[index...])
+        options.runtimeOptions = parseRuntimeOptions(runtimeArguments)
         return options
     }
 
@@ -652,6 +784,13 @@ struct MacStreamCTL {
                     Foundation.exit(1)
                 }
                 options.sunshineBinaryPath = arguments[index + 1]
+                index += 1
+            case "--agent-binary":
+                guard index + 1 < arguments.count else {
+                    print("Missing value for --agent-binary")
+                    Foundation.exit(1)
+                }
+                options.agentExecutablePath = arguments[index + 1]
                 index += 1
             case "--log-dir":
                 guard index + 1 < arguments.count else {
@@ -700,6 +839,10 @@ struct MacStreamCTL {
             settings.sunshineBinaryPath = expandTilde(sunshineBinaryPath)
         }
 
+        if let agentExecutablePath = options.agentExecutablePath {
+            settings.agentExecutablePath = expandTilde(agentExecutablePath)
+        }
+
         if let logDirectoryPath = options.logDirectoryPath {
             settings.logDirectoryPath = expandTilde(logDirectoryPath)
         }
@@ -737,10 +880,14 @@ private struct LaunchAgentCLIOptions {
     var action = "status"
     var overwrite = false
     var runtimeOptions = RuntimeCLIOptions()
-    var sunshineBinaryPath: String?
-    var configPath: String?
+    var agentExecutablePath: String?
     var logDirectoryPath: String?
     var outputPath: String?
+}
+
+private struct AgentCLIOptions {
+    var action = "status"
+    var runtimeOptions = RuntimeCLIOptions()
 }
 
 private struct RuntimeCLIOptions {
@@ -752,6 +899,7 @@ private struct RuntimeCLIOptions {
     var startAfterPreflight = false
     var configDirectoryPath: String?
     var sunshineBinaryPath: String?
+    var agentExecutablePath: String?
     var logDirectoryPath: String?
     var outputPath: String?
     var audioCaptureMode: AudioCaptureMode?

@@ -8,6 +8,7 @@ import Darwin
 
 public enum LaunchAgentManagerError: Error, LocalizedError {
     case invalidPlist([String])
+    case missingAgentExecutable(String)
     case missingSunshineBinary(String)
     case missingSunshineConfiguration(String)
     case logDirectoryNotWritable(String)
@@ -17,6 +18,8 @@ public enum LaunchAgentManagerError: Error, LocalizedError {
         switch self {
         case .invalidPlist(let errors):
             return "Invalid LaunchAgent plist: \(errors.joined(separator: ", "))"
+        case .missingAgentExecutable(let path):
+            return "MacStream agent executable is missing or not executable at \(path)."
         case .missingSunshineBinary(let path):
             return "Sunshine binary is missing or not executable at \(path)."
         case .missingSunshineConfiguration(let path):
@@ -43,9 +46,9 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
     public init(
         definition: LaunchAgentDefinition,
         installedPlistURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/com.macstream.host.sunshine.plist"),
+            .appendingPathComponent("Library/LaunchAgents/com.macstream.host.agent.plist"),
         draftPlistURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MacStreamHost/LaunchAgents/com.macstream.host.sunshine.plist"),
+            .appendingPathComponent("Library/Application Support/MacStreamHost/LaunchAgents/com.macstream.host.agent.plist"),
         fileManager: FileManager = .default,
         dateProvider: @escaping () -> Date = Date.init,
         runner: CommandRunning = ProcessCommandRunner(),
@@ -69,17 +72,17 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
 
     public convenience init(
         configurationManager: ConfigurationManaging = DefaultConfigurationManager(),
-        sunshineBinaryPath: String? = DefaultSunshineBinaryResolver().resolveBinary()?.path
+        agentExecutablePath: String? = DefaultAgentExecutableResolver().resolveExecutable()?.path
     ) {
-        let fallbackSunshineBinary = "/Applications/MacStream Host.app/Contents/Resources/sunshine/bin/sunshine"
+        let fallbackAgentExecutable = "/Applications/MacStream Host.app/Contents/MacOS/macstream-agent"
         let logDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/MacStreamHost")
             .path
 
         self.init(
             definition: LaunchAgentDefinition(
-                sunshineBinaryPath: sunshineBinaryPath ?? fallbackSunshineBinary,
-                sunshineConfigPath: configurationManager.sunshineConfigURL.path,
+                executablePath: agentExecutablePath ?? fallbackAgentExecutable,
+                arguments: ["run"],
                 logDirectoryPath: logDirectory
             )
         )
@@ -183,6 +186,10 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
     }
 
     public func load() async throws {
+        if await status() == .loaded {
+            return
+        }
+
         if !fileManager.fileExists(atPath: installedPlistURL.path) {
             try await installLaunchAgent()
         }
@@ -194,7 +201,12 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
         )
 
         guard result.exitCode == 0 else {
-            throw LaunchAgentManagerError.launchctlFailed(result.standardError.trimmingCharacters(in: .whitespacesAndNewlines))
+            if await status() == .loaded {
+                return
+            }
+
+            let message = result.standardError.isEmpty ? result.standardOutput : result.standardError
+            throw LaunchAgentManagerError.launchctlFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
@@ -219,12 +231,17 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
     }
 
     private func validateInstallPreconditions() throws {
-        guard fileManager.isExecutableFile(atPath: definition.sunshineBinaryPath) else {
-            throw LaunchAgentManagerError.missingSunshineBinary(definition.sunshineBinaryPath)
+        guard fileManager.isExecutableFile(atPath: definition.executablePath) else {
+            if definition.label == "com.macstream.host.sunshine" {
+                throw LaunchAgentManagerError.missingSunshineBinary(definition.executablePath)
+            }
+            throw LaunchAgentManagerError.missingAgentExecutable(definition.executablePath)
         }
 
-        guard fileManager.fileExists(atPath: definition.sunshineConfigPath) else {
-            throw LaunchAgentManagerError.missingSunshineConfiguration(definition.sunshineConfigPath)
+        for requiredFilePath in definition.requiredFilePaths {
+            guard fileManager.fileExists(atPath: requiredFilePath) else {
+                throw LaunchAgentManagerError.missingSunshineConfiguration(requiredFilePath)
+            }
         }
 
         let logDirectoryURL = URL(fileURLWithPath: definition.logDirectoryPath)
@@ -244,16 +261,12 @@ public final class DefaultLaunchAgentManager: LaunchAgentManaging {
         }
 
         if let arguments = plist["ProgramArguments"] as? [String] {
-            if arguments.count != 2 {
-                errors.append("ProgramArguments must contain Sunshine binary and config path.")
+            if arguments.isEmpty {
+                errors.append("ProgramArguments must contain the MacStream agent executable.")
             }
 
             if arguments.first?.isEmpty != false {
-                errors.append("Sunshine binary path is required.")
-            }
-
-            if arguments.dropFirst().first?.isEmpty != false {
-                errors.append("Sunshine config path is required.")
+                errors.append("MacStream agent executable path is required.")
             }
         } else {
             errors.append("ProgramArguments must be an array of strings.")

@@ -10,6 +10,10 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
     private let networkDiagnosticsManager: NetworkDiagnosticsManaging
     private let launchAgentManager: LaunchAgentManaging
     private let logManager: LogManaging?
+    private let agentManager: AgentManaging?
+    private let powerAssertionManager: PowerAssertionManaging?
+    private let hostPrivacyManager: HostPrivacyManaging?
+    private let remoteWorkSessionManager: RemoteWorkSessionManaging?
 
     public init(
         sunshineManager: SunshineManaging,
@@ -18,7 +22,11 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         audioDeviceManager: AudioDeviceManaging,
         networkDiagnosticsManager: NetworkDiagnosticsManaging,
         launchAgentManager: LaunchAgentManaging,
-        logManager: LogManaging? = nil
+        logManager: LogManaging? = nil,
+        agentManager: AgentManaging? = nil,
+        powerAssertionManager: PowerAssertionManaging? = nil,
+        hostPrivacyManager: HostPrivacyManaging? = nil,
+        remoteWorkSessionManager: RemoteWorkSessionManaging? = nil
     ) {
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
@@ -27,22 +35,44 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         self.networkDiagnosticsManager = networkDiagnosticsManager
         self.launchAgentManager = launchAgentManager
         self.logManager = logManager
+        self.agentManager = agentManager
+        self.powerAssertionManager = powerAssertionManager
+        self.hostPrivacyManager = hostPrivacyManager
+        self.remoteWorkSessionManager = remoteWorkSessionManager
     }
 
     public func runHealthCheck() async -> HealthCheckResult {
         let sunshine = await sunshineManager.status()
         let blackHole = await blackHoleManager.installationStatus()
         let permissions = await permissionManager.currentStatus()
-        let audioStatus = await audioDeviceManager.validateAudioRoute()
+        let audioStatus = await audioHealthStatus(blackHole: blackHole)
         let network = await networkDiagnosticsManager.runDiagnostics()
         let launchAgent = await launchAgentManager.status()
+        let agent = await agentManager?.status()
+        let localPower = await powerAssertionManager?.currentStatus()
+        let localPrivacy = await hostPrivacyManager?.currentStatus()
+        let remoteWork = await remoteWorkSessionManager?.status()
+        let effectivePower = remoteWork?.powerStatus.isActive == true ? remoteWork?.powerStatus : localPower
+        let effectivePrivacy = remoteWork?.agentStatus.isRunning == true ? remoteWork?.hostPrivacyStatus : localPrivacy
 
         var checks = [
             macOSVersionCheck(),
             architectureCheck(),
             HealthCheck(
+                id: .macStreamAgent,
+                title: "MacStream Agent",
+                status: agent?.checkStatus ?? .warning,
+                detail: agent?.detail ?? "Agente residente ainda nao configurado."
+            ),
+            HealthCheck(
+                id: .remoteWorkMode,
+                title: "Modo remoto MacStream",
+                status: remoteWork?.state.checkStatus ?? .warning,
+                detail: remoteWork?.nextStep ?? "Prepare o MacStream antes de iniciar uma sessao remota."
+            ),
+            HealthCheck(
                 id: .sunshine,
-                title: "Sunshine",
+                title: "Engine de video",
                 status: sunshine.state.checkStatus,
                 detail: sunshineDetail(for: sunshine)
             )
@@ -55,20 +85,20 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         checks.append(contentsOf: [
             HealthCheck(
                 id: .webUI,
-                title: "Web UI Sunshine",
+                title: "Pareamento",
                 status: sunshine.webUIReachable ? .pass : .warning,
-                detail: sunshine.webUIReachable ? "https://localhost:47990 está acessível." : "Web UI será validada quando Sunshine estiver rodando."
+                detail: sunshine.webUIReachable ? "Interface local de pareamento esta acessivel." : "Pareamento sera validado quando a engine estiver rodando."
             ),
             HealthCheck(
                 id: .blackHole,
-                title: "BlackHole 2ch",
+                title: "Rota de audio gerenciada",
                 status: blackHole.checkStatus,
-                detail: blackHole == .installed ? "BlackHole 2ch detectado." : "BlackHole não será instalado automaticamente nesta fase."
+                detail: blackHole == .installed ? "Driver de audio gerenciado detectado." : "Audio pode exigir instalacao/validacao guiada."
             ),
             HealthCheck(
                 id: .permissions,
                 title: "Permissões macOS",
-                status: permissions.aggregateStatus,
+                status: permissionHealthStatus(for: permissions),
                 detail: permissionDetail(for: permissions)
             ),
             HealthCheck(
@@ -85,9 +115,21 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             ),
             HealthCheck(
                 id: .launchAgent,
-                title: "LaunchAgent",
+                title: "LaunchAgent MacStream",
                 status: launchAgent.checkStatus,
                 detail: launchAgentDetail(for: launchAgent)
+            ),
+            HealthCheck(
+                id: .power,
+                title: "Energia",
+                status: effectivePower?.checkStatus ?? .warning,
+                detail: effectivePower?.detail ?? "Keep-awake sera ativado durante o modo remoto."
+            ),
+            HealthCheck(
+                id: .hostPrivacy,
+                title: "Privacidade do host",
+                status: effectivePrivacy?.checkStatus ?? .warning,
+                detail: effectivePrivacy?.detail ?? "Bloqueio do host e opcional e precisa de validacao pratica."
             )
         ])
 
@@ -119,20 +161,20 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         switch status.state {
         case .running:
             if let binaryPath = status.binaryPath {
-                return "Sunshine está rodando. Binário detectado em \(binaryPath)."
+                return "Engine de video gerenciada esta rodando. Binario interno em \(binaryPath)."
             }
-            return "Sunshine está rodando, mas o binário ainda não foi localizado."
+            return "Engine de video esta rodando, mas o binario ainda nao foi localizado."
         case .stopped:
             if let binaryPath = status.binaryPath {
-                return "Sunshine detectado em \(binaryPath), mas não está rodando."
+                return "Engine de video detectada em \(binaryPath), mas nao esta rodando."
             }
-            return "Sunshine detectado, mas não está rodando."
+            return "Engine de video detectada, mas nao esta rodando."
         case .notInstalled:
-            return "Detectar ou apontar um binário Sunshine antes de iniciar o servidor."
+            return "Instale/prepare a engine de video do MacStream antes de iniciar o modo remoto."
         case .failed:
-            return "Consultar logs do Sunshine para identificar a causa."
+            return "Consultar logs da engine de video para identificar a causa."
         default:
-            return "Sunshine ainda não foi iniciado pelo app."
+            return "Engine de video ainda nao foi iniciada pelo MacStream."
         }
     }
 
@@ -156,9 +198,9 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         if joined.contains("no screen capture permission") {
             return HealthCheck(
                 id: .sunshineRuntime,
-                title: "Runtime Sunshine",
+                title: "Runtime da engine de video",
                 status: .fail,
-                detail: "Sunshine reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e conceda Screen Recording antes do teste real."
+                detail: "A engine de video reportou ausencia de permissao de Gravacao de Tela. Abra Ajustes do Sistema antes do teste real."
             )
         }
 
@@ -166,26 +208,26 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             || joined.contains("unable to find display or encoder") {
             return HealthCheck(
                 id: .sunshineRuntime,
-                title: "Runtime Sunshine",
+                title: "Runtime da engine de video",
                 status: .fail,
-                detail: "Sunshine iniciou, mas não encontrou encoder/display funcional. Corrija permissões de tela e valide os logs antes de parear."
+                detail: "A engine de video iniciou, mas nao encontrou encoder/display funcional. Corrija permissoes de tela e valide os logs antes de parear."
             )
         }
 
         if joined.contains("unrecognized configurable option") {
             return HealthCheck(
                 id: .sunshineRuntime,
-                title: "Runtime Sunshine",
+                title: "Runtime da engine de video",
                 status: .warning,
-                detail: "Sunshine reportou uma opção de configuração não reconhecida. Regere a configuração isolada com `preflight --overwrite`."
+                detail: "A engine de video reportou uma opcao de configuracao nao reconhecida. Regere a configuracao isolada."
             )
         }
 
         return HealthCheck(
             id: .sunshineRuntime,
-            title: "Runtime Sunshine",
+            title: "Runtime da engine de video",
             status: .pass,
-            detail: "Nenhum erro crítico recente foi encontrado nos logs do Sunshine."
+            detail: "Nenhum erro critico recente foi encontrado nos logs da engine de video."
         )
     }
 
@@ -202,14 +244,24 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
     private func audioDetail(for status: CheckStatus) -> String {
         switch status {
         case .pass:
-            return "BlackHole 2ch foi detectado como rota de captura disponível."
+            return "Rota de audio do MacStream foi detectada."
         case .warning:
-            return "Há dispositivos de áudio, mas BlackHole 2ch não foi detectado; validar captura nativa do macOS."
+            return "Driver de audio detectado; validar audio no teste pratico do Moonlight."
         case .fail:
-            return "Nenhum dispositivo de áudio foi detectado via CoreAudio."
+            return "Nenhum dispositivo de audio foi detectado via CoreAudio."
         case .unknown:
-            return "Não foi possível determinar a rota de áudio."
+            return "Nao foi possivel determinar a rota de audio."
         }
+    }
+
+    private func audioHealthStatus(blackHole: BlackHoleInstallationStatus) async -> CheckStatus {
+        let routeStatus = await audioDeviceManager.validateAudioRoute()
+
+        if routeStatus == .fail && blackHole == .installed {
+            return .warning
+        }
+
+        return routeStatus
     }
 
     private func networkDetail(for result: NetworkDiagnosticResult) -> String {
@@ -241,18 +293,24 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         return "Validar: \(pending.joined(separator: ", "))."
     }
 
+    private func permissionHealthStatus(for permissions: MacOSPermissionsStatus) -> CheckStatus {
+        // TCC is per executable. The app can guide permissions, but the real blocker for
+        // streaming is detected from the managed video engine runtime/logs after start.
+        permissions.aggregateStatus == .pass ? .pass : .warning
+    }
+
     private func launchAgentDetail(for status: LaunchAgentStatus) -> String {
         switch status {
         case .loaded:
-            return "LaunchAgent carregado."
+            return "LaunchAgent do MacStream carregado."
         case .installed:
-            return "LaunchAgent instalado; use carregar para ativar nesta sessão."
+            return "LaunchAgent do MacStream instalado; use carregar para ativar nesta sessao."
         case .notInstalled:
-            return "LaunchAgent ainda não instalado; gere e revise o plist antes de carregar."
+            return "LaunchAgent do MacStream ainda nao instalado."
         case .failed:
-            return "LaunchAgent encontrado, mas o plist não passou na validação."
+            return "LaunchAgent do MacStream encontrado, mas o plist nao passou na validacao."
         case .unknown:
-            return "Não foi possível determinar status do LaunchAgent."
+            return "Nao foi possivel determinar status do LaunchAgent."
         }
     }
 }
