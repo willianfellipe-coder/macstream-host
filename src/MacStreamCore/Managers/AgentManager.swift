@@ -114,6 +114,19 @@ public final class DefaultAgentManager: AgentManaging {
         try data.write(to: statusURL, options: .atomic)
     }
 
+    /// If the LaunchAgent reports loaded but the residente agent's heartbeat is
+    /// stale, bounce it via launchctl so KeepAlive can relaunch the process.
+    /// Returns true when a recovery attempt actually ran.
+    public func recoverIfStale() async throws -> Bool {
+        let current = await status()
+        guard current.launchAgentStatus == .loaded, current.isRunning == false else {
+            return false
+        }
+        try await launchAgentManager.unload()
+        try await launchAgentManager.load()
+        return true
+    }
+
     private func agentDetail(for status: LaunchAgentStatus) -> String {
         switch status {
         case .loaded:

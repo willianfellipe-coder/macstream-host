@@ -28,6 +28,11 @@ public final class AppState: ObservableObject {
     @Published public private(set) var powerAssertionStatus: PowerAssertionStatus
     @Published public private(set) var hostPrivacyStatus: HostPrivacyStatus
     @Published public private(set) var lastPermissionRequestResults: [PermissionRequestResult]
+    @Published public private(set) var lastAgentRecoveryAttempt: Date?
+    @Published public var privacyOverlayActive: Bool = false
+
+    private let agentRecoveryCooldown: TimeInterval = 60
+    private let dateProvider: () -> Date
 
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
@@ -65,8 +70,10 @@ public final class AppState: ObservableObject {
         managedEngineManager: ManagedEngineManaging? = nil,
         powerAssertionManager: PowerAssertionManaging? = nil,
         hostPrivacyManager: HostPrivacyManaging? = nil,
-        remoteWorkSessionManager: RemoteWorkSessionManaging? = nil
+        remoteWorkSessionManager: RemoteWorkSessionManaging? = nil,
+        dateProvider: @escaping () -> Date = Date.init
     ) {
+        self.dateProvider = dateProvider
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
         self.dependencyInstallerManager = dependencyInstallerManager
@@ -130,6 +137,7 @@ public final class AppState: ObservableObject {
         self.powerAssertionStatus = .inactive
         self.hostPrivacyStatus = .initial
         self.lastPermissionRequestResults = []
+        self.lastAgentRecoveryAttempt = nil
     }
 
     public static func localDiagnostics(settingsManager: SettingsManaging = FileSettingsManager()) -> AppState {
@@ -252,7 +260,13 @@ public final class AppState: ObservableObject {
             sunshine: sunshine,
             blackHole: blackHole
         )
-        let agent = await agentManager.status()
+        var agent = await agentManager.status()
+        if shouldAttemptAgentRecovery(for: agent) {
+            lastAgentRecoveryAttempt = dateProvider()
+            if (try? await agentManager.recoverIfStale()) == true {
+                agent = await agentManager.status()
+            }
+        }
         let engine = await managedEngineManager.status()
         let localPower = await powerAssertionManager.currentStatus()
         let localPrivacy = await hostPrivacyManager.currentStatus()
@@ -381,9 +395,20 @@ public final class AppState: ObservableObject {
     }
 
     public func lockHostForPrivacy() async {
-        await runRemoteWorkOperation {
-            try await remoteWorkSessionManager.lockHostForPrivacy()
+        switch runtimeSettings.hostPrivacyPolicy.mode {
+        case .appOverlay:
+            privacyOverlayActive = true
+            lastOperationMessage = "Overlay de privacidade ativada. Clique 'Desbloquear' para encerrar."
+        case .systemSuspend:
+            await runRemoteWorkOperation {
+                try await remoteWorkSessionManager.lockHostForPrivacy()
+            }
         }
+    }
+
+    public func dismissPrivacyOverlay() {
+        privacyOverlayActive = false
+        lastOperationMessage = "Overlay de privacidade encerrada."
     }
 
     public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {
@@ -842,6 +867,14 @@ public final class AppState: ObservableObject {
 
     public func dependencyStatus(for id: DependencyID) -> CheckStatus {
         dependencyStatus(id, dependencyStatuses)
+    }
+
+    private func shouldAttemptAgentRecovery(for agent: MacStreamAgentStatus) -> Bool {
+        guard agent.launchAgentStatus == .loaded, agent.isRunning == false else {
+            return false
+        }
+        guard let last = lastAgentRecoveryAttempt else { return true }
+        return dateProvider().timeIntervalSince(last) >= agentRecoveryCooldown
     }
 
     private func stepState(for status: CheckStatus) -> OnboardingStepState {

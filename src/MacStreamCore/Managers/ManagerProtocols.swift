@@ -74,6 +74,7 @@ public protocol AgentManaging {
     func writeCommand(_ command: MacStreamAgentCommand) throws
     func readLastReport() throws -> RemoteWorkSessionReport?
     func writeReport(_ report: RemoteWorkSessionReport) throws
+    func recoverIfStale() async throws -> Bool
 }
 
 public protocol PowerAssertionManaging {

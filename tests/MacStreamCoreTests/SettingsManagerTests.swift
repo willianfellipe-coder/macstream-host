@@ -29,6 +29,49 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(try manager.load(), settings)
     }
 
+    func testLoadingLegacySettingsWithoutDirectoryFieldsFallsBackToDefaults() throws {
+        let directory = try makeTemporaryDirectory()
+        let settingsURL = directory.appendingPathComponent("settings.json")
+        let legacyJSON = """
+        {
+          "sunshineBinaryPath": "/opt/homebrew/bin/sunshine"
+        }
+        """
+        try legacyJSON.write(to: settingsURL, atomically: true, encoding: .utf8)
+
+        let manager = FileSettingsManager(settingsURL: settingsURL)
+        let settings = try manager.load()
+        let defaults = MacStreamHostSettings.defaults()
+
+        XCTAssertEqual(settings.sunshineBinaryPath, "/opt/homebrew/bin/sunshine")
+        XCTAssertEqual(settings.configDirectoryPath, defaults.configDirectoryPath)
+        XCTAssertEqual(settings.logDirectoryPath, defaults.logDirectoryPath)
+        XCTAssertEqual(settings.hostPrivacyPolicy.mode, .appOverlay)
+    }
+
+    func testLoadingSettingsWithoutPrivacyModeDefaultsToAppOverlay() throws {
+        let directory = try makeTemporaryDirectory()
+        let settingsURL = directory.appendingPathComponent("settings.json")
+        let priorJSON = """
+        {
+          "configDirectoryPath": "/tmp/macstream-config",
+          "logDirectoryPath": "/tmp/macstream-logs",
+          "audioCaptureMode": "blackHole2ch",
+          "hostPrivacyPolicy": {
+            "offerLockOnSessionStart": true,
+            "allowManualLock": true
+          }
+        }
+        """
+        try priorJSON.write(to: settingsURL, atomically: true, encoding: .utf8)
+
+        let manager = FileSettingsManager(settingsURL: settingsURL)
+        let settings = try manager.load()
+
+        XCTAssertEqual(settings.hostPrivacyPolicy.mode, .appOverlay)
+        XCTAssertTrue(settings.hostPrivacyPolicy.allowManualLock)
+    }
+
     func testSettingsSunshineResolverPrefersExecutableOverride() throws {
         let directory = try makeTemporaryDirectory()
         let binaryURL = directory.appendingPathComponent("sunshine")

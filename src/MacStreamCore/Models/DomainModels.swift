@@ -202,13 +202,48 @@ public struct PowerAssertionStatus: Codable, Equatable {
     )
 }
 
+public enum HostPrivacyMode: String, Codable, Equatable, CaseIterable {
+    /// Cover the host screen with an in-app NSWindow. Safe — does not touch the
+    /// macOS graphics session and cannot disrupt an active Moonlight stream.
+    case appOverlay
+    /// Invoke `CGSession -suspend`. May suspend the user's graphical session,
+    /// which is unvalidated against Sunshine streaming and therefore experimental.
+    case systemSuspend
+
+    public var displayName: String {
+        switch self {
+        case .appOverlay: return "Overlay no app (seguro)"
+        case .systemSuspend: return "Bloqueio do sistema (experimental)"
+        }
+    }
+}
+
 public struct HostPrivacyPolicy: Codable, Equatable {
     public var offerLockOnSessionStart: Bool
     public var allowManualLock: Bool
+    public var mode: HostPrivacyMode
 
-    public init(offerLockOnSessionStart: Bool = true, allowManualLock: Bool = true) {
+    public init(
+        offerLockOnSessionStart: Bool = true,
+        allowManualLock: Bool = true,
+        mode: HostPrivacyMode = .appOverlay
+    ) {
         self.offerLockOnSessionStart = offerLockOnSessionStart
         self.allowManualLock = allowManualLock
+        self.mode = mode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case offerLockOnSessionStart
+        case allowManualLock
+        case mode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        offerLockOnSessionStart = try container.decodeIfPresent(Bool.self, forKey: .offerLockOnSessionStart) ?? true
+        allowManualLock = try container.decodeIfPresent(Bool.self, forKey: .allowManualLock) ?? true
+        mode = try container.decodeIfPresent(HostPrivacyMode.self, forKey: .mode) ?? .appOverlay
     }
 
     public static let defaults = HostPrivacyPolicy()
@@ -771,10 +806,13 @@ public struct MacStreamHostSettings: Codable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = MacStreamHostSettings.defaults()
         sunshineBinaryPath = try container.decodeIfPresent(String.self, forKey: .sunshineBinaryPath)
         agentExecutablePath = try container.decodeIfPresent(String.self, forKey: .agentExecutablePath)
-        configDirectoryPath = try container.decode(String.self, forKey: .configDirectoryPath)
-        logDirectoryPath = try container.decode(String.self, forKey: .logDirectoryPath)
+        configDirectoryPath = try container.decodeIfPresent(String.self, forKey: .configDirectoryPath)
+            ?? defaults.configDirectoryPath
+        logDirectoryPath = try container.decodeIfPresent(String.self, forKey: .logDirectoryPath)
+            ?? defaults.logDirectoryPath
         audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .blackHole2ch
         powerPolicy = try container.decodeIfPresent(PowerPolicy.self, forKey: .powerPolicy) ?? .defaults
         hostPrivacyPolicy = try container.decodeIfPresent(HostPrivacyPolicy.self, forKey: .hostPrivacyPolicy) ?? .defaults

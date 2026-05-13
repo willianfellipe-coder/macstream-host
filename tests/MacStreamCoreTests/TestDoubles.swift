@@ -214,10 +214,11 @@ final class MockNetworkDiagnosticsManager: NetworkDiagnosticsManaging {
 }
 
 final class MockLaunchAgentManager: LaunchAgentManaging {
-    private var currentStatus: LaunchAgentStatus
+    private(set) var currentStatus: LaunchAgentStatus
     let label = "com.macstream.host.sunshine"
     let installedPlistURL: URL
     let draftPlistURL: URL
+    private(set) var lifecycleCalls: [String] = []
 
     init(
         status: LaunchAgentStatus = .notInstalled,
@@ -246,18 +247,22 @@ final class MockLaunchAgentManager: LaunchAgentManaging {
     }
 
     func installLaunchAgent() async throws {
+        lifecycleCalls.append("install")
         currentStatus = .installed
     }
 
     func uninstallLaunchAgent() async throws {
+        lifecycleCalls.append("uninstall")
         currentStatus = .notInstalled
     }
 
     func load() async throws {
+        lifecycleCalls.append("load")
         currentStatus = .loaded
     }
 
     func unload() async throws {
+        lifecycleCalls.append("unload")
         currentStatus = .installed
     }
 }
@@ -271,6 +276,7 @@ final class MockAgentManager: AgentManaging {
     var didInstall = false
     var didLoad = false
     var didUnload = false
+    var recoverAttempts = 0
 
     init(
         statusURL: URL = URL(fileURLWithPath: "/tmp/macstream-agent-status.json"),
@@ -314,6 +320,16 @@ final class MockAgentManager: AgentManaging {
 
     func writeReport(_ report: RemoteWorkSessionReport) throws {
         lastReport = report
+    }
+
+    func recoverIfStale() async throws -> Bool {
+        recoverAttempts += 1
+        guard currentStatus.launchAgentStatus == .loaded, currentStatus.isRunning == false else {
+            return false
+        }
+        try await unload()
+        try await load()
+        return true
     }
 }
 
@@ -373,6 +389,7 @@ final class MockRemoteWorkSessionManager: RemoteWorkSessionManaging {
     var started = false
     var stopped = false
     var didLock = false
+    var lockHostCallCount = 0
     var report = RemoteWorkSessionReport.initial
 
     func prepare(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport {
@@ -402,6 +419,7 @@ final class MockRemoteWorkSessionManager: RemoteWorkSessionManaging {
 
     func lockHostForPrivacy() async throws -> RemoteWorkSessionReport {
         didLock = true
+        lockHostCallCount += 1
         report.hostPrivacyStatus = HostPrivacyStatus(lastAction: .lockRequested, detail: "Lock requested.")
         return report
     }

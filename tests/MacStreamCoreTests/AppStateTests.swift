@@ -162,4 +162,53 @@ final class AppStateTests: XCTestCase {
         )
         XCTAssertFalse(appState.lastPermissionRequestResults.isEmpty)
     }
+
+    @MainActor
+    func testLockHostForPrivacyInAppOverlayModeSetsFlagAndSkipsAgent() async {
+        let agent = MockAgentManager()
+        let remoteWork = MockRemoteWorkSessionManager()
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .appOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            agent: agent,
+            remoteWork: remoteWork
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertTrue(appState.privacyOverlayActive)
+        XCTAssertEqual(remoteWork.lockHostCallCount, 0)
+        XCTAssertTrue(agent.commands.allSatisfy { $0.kind != .lockHost })
+    }
+
+    @MainActor
+    func testLockHostForPrivacyInSystemSuspendModeRoutesThroughRemoteWorkManager() async {
+        let remoteWork = MockRemoteWorkSessionManager()
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .systemSuspend)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            remoteWork: remoteWork
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertFalse(appState.privacyOverlayActive)
+        XCTAssertEqual(remoteWork.lockHostCallCount, 1)
+    }
+
+    @MainActor
+    func testDismissPrivacyOverlayClearsFlag() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .appOverlay)
+        let appState = makeTestAppState(runtimeSettings: settings)
+
+        await appState.lockHostForPrivacy()
+        XCTAssertTrue(appState.privacyOverlayActive)
+
+        appState.dismissPrivacyOverlay()
+
+        XCTAssertFalse(appState.privacyOverlayActive)
+    }
 }
