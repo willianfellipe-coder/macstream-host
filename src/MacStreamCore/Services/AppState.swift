@@ -30,6 +30,9 @@ public final class AppState: ObservableObject {
     @Published public private(set) var lastPermissionRequestResults: [PermissionRequestResult]
     @Published public private(set) var lastAgentRecoveryAttempt: Date?
     @Published public var privacyOverlayActive: Bool = false
+    @Published public private(set) var isAppPasswordSet: Bool = false
+
+    public let appPasswordStore: AppPasswordStoring
 
     private let agentRecoveryCooldown: TimeInterval = 60
     private let dateProvider: () -> Date
@@ -71,9 +74,11 @@ public final class AppState: ObservableObject {
         powerAssertionManager: PowerAssertionManaging? = nil,
         hostPrivacyManager: HostPrivacyManaging? = nil,
         remoteWorkSessionManager: RemoteWorkSessionManaging? = nil,
+        appPasswordStore: AppPasswordStoring? = nil,
         dateProvider: @escaping () -> Date = Date.init
     ) {
         self.dateProvider = dateProvider
+        self.appPasswordStore = appPasswordStore ?? KeychainAppPasswordStore()
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
         self.dependencyInstallerManager = dependencyInstallerManager
@@ -138,6 +143,7 @@ public final class AppState: ObservableObject {
         self.hostPrivacyStatus = .initial
         self.lastPermissionRequestResults = []
         self.lastAgentRecoveryAttempt = nil
+        self.isAppPasswordSet = (appPasswordStore ?? self.appPasswordStore).isPasswordSet()
     }
 
     public static func localDiagnostics(settingsManager: SettingsManaging = FileSettingsManager()) -> AppState {
@@ -406,9 +412,65 @@ public final class AppState: ObservableObject {
         }
     }
 
-    public func dismissPrivacyOverlay() {
+    /// Whether the overlay should prompt for the app password before clearing.
+    /// True only when both a password is set AND the policy requires it.
+    public var overlayUnlockRequiresPassword: Bool {
+        isAppPasswordSet && runtimeSettings.appPasswordPolicy.requireOnOverlayUnlock
+    }
+
+    /// Attempts to dismiss the privacy overlay. When a password is required,
+    /// the caller must pass the user-entered candidate. Returns true on success,
+    /// false when the candidate is wrong (UI should display an error).
+    @discardableResult
+    public func dismissPrivacyOverlay(passwordCandidate: String? = nil) -> Bool {
+        if overlayUnlockRequiresPassword {
+            guard let candidate = passwordCandidate,
+                  appPasswordStore.verify(candidate) else {
+                lastOperationMessage = "Senha incorreta. Tente novamente."
+                return false
+            }
+        }
         privacyOverlayActive = false
         lastOperationMessage = "Tela do host restaurada."
+        return true
+    }
+
+    public func setAppPassword(_ password: String) {
+        do {
+            try appPasswordStore.setPassword(password)
+            isAppPasswordSet = appPasswordStore.isPasswordSet()
+            lastOperationMessage = "Senha do app salva."
+        } catch {
+            lastOperationMessage = error.localizedDescription
+        }
+    }
+
+    public func clearAppPassword() {
+        do {
+            try appPasswordStore.clearPassword()
+            isAppPasswordSet = appPasswordStore.isPasswordSet()
+            var settings = runtimeSettings
+            if settings.appPasswordPolicy.requireOnOverlayUnlock {
+                settings.appPasswordPolicy.requireOnOverlayUnlock = false
+                runtimeSettings = settings
+                try? settingsManager.save(settings)
+            }
+            lastOperationMessage = "Senha do app removida."
+        } catch {
+            lastOperationMessage = error.localizedDescription
+        }
+    }
+
+    public func updateAppPasswordPolicy(_ policy: AppPasswordPolicy) async {
+        var settings = runtimeSettings
+        settings.appPasswordPolicy = policy
+        await saveSettings(settings, successMessage: "Politica de senha do app atualizada.")
+    }
+
+    public func updateShowMenuBarItem(_ visible: Bool) async {
+        var settings = runtimeSettings
+        settings.showMenuBarItem = visible
+        await saveSettings(settings, successMessage: visible ? "Icone na barra de menus ativado." : "Icone na barra de menus ocultado.")
     }
 
     public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {

@@ -22,9 +22,14 @@ struct MacStreamHostApp: App {
                 }
                 .onAppear {
                     if privacyOverlayController == nil {
-                        privacyOverlayController = PrivacyOverlayController(onUnlock: {
-                            appState.dismissPrivacyOverlay()
-                        })
+                        privacyOverlayController = PrivacyOverlayController(
+                            requiresPassword: { [weak appState] in
+                                appState?.overlayUnlockRequiresPassword ?? false
+                            },
+                            onUnlock: { [weak appState] candidate in
+                                appState?.dismissPrivacyOverlay(passwordCandidate: candidate) ?? false
+                            }
+                        )
                     }
                 }
                 .onChange(of: appState.privacyOverlayActive) { _, isActive in
@@ -36,5 +41,32 @@ struct MacStreamHostApp: App {
                 }
         }
         .windowStyle(.titleBar)
+
+        MenuBarExtra(
+            "MacStream Host",
+            systemImage: menuBarSymbol,
+            isInserted: menuBarBinding
+        ) {
+            MenuBarContent(appState: appState)
+        }
+    }
+
+    private var menuBarBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.showMenuBarItem },
+            set: { _ in /* toggled from Settings, not from the menu chrome */ }
+        )
+    }
+
+    private var menuBarSymbol: String {
+        if appState.privacyOverlayActive {
+            return "lock.display"
+        }
+        switch appState.remoteWorkSession.state {
+        case .running, .degraded: return "dot.radiowaves.left.and.right"
+        case .starting, .stopping: return "arrow.triangle.2.circlepath"
+        case .blocked: return "exclamationmark.triangle.fill"
+        default: return "display"
+        }
     }
 }

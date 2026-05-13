@@ -589,7 +589,8 @@ func makeTestAppState(
     engine: ManagedEngineManaging = MockManagedEngineManager(),
     power: PowerAssertionManaging = MockPowerAssertionManager(),
     privacy: HostPrivacyManaging = MockHostPrivacyManager(),
-    remoteWork: RemoteWorkSessionManaging = MockRemoteWorkSessionManager()
+    remoteWork: RemoteWorkSessionManaging = MockRemoteWorkSessionManager(),
+    appPasswordStore: AppPasswordStoring = InMemoryAppPasswordStore()
 ) -> AppState {
     AppState(
         sunshineManager: sunshine,
@@ -621,6 +622,7 @@ func makeTestAppState(
         managedEngineManager: engine,
         powerAssertionManager: power,
         hostPrivacyManager: privacy,
-        remoteWorkSessionManager: remoteWork
+        remoteWorkSessionManager: remoteWork,
+        appPasswordStore: appPasswordStore
     )
 }

@@ -8,9 +8,14 @@ import SwiftUI
 final class PrivacyOverlayController {
     private var backdropWindows: [NSWindow] = []
     private var unlockPanel: NSWindow?
-    private let onUnlock: () -> Void
+    private let requiresPassword: () -> Bool
+    private let onUnlock: (String?) -> Bool
 
-    init(onUnlock: @escaping () -> Void) {
+    init(
+        requiresPassword: @escaping () -> Bool,
+        onUnlock: @escaping (String?) -> Bool
+    ) {
+        self.requiresPassword = requiresPassword
         self.onUnlock = onUnlock
     }
 
@@ -65,9 +70,12 @@ final class PrivacyOverlayController {
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
             let hosting = NSHostingController(
-                rootView: PrivacyOverlayContent(onUnlock: { [weak self] in
-                    self?.onUnlock()
-                })
+                rootView: PrivacyOverlayContent(
+                    requiresPassword: requiresPassword(),
+                    onUnlock: { [weak self] candidate in
+                        self?.onUnlock(candidate) ?? false
+                    }
+                )
             )
             hosting.view.frame = NSRect(origin: .zero, size: panelSize)
             panel.contentView = hosting.view
@@ -94,12 +102,16 @@ private final class KeyableBorderlessWindow: NSWindow {
 }
 
 struct PrivacyOverlayContent: View {
-    let onUnlock: () -> Void
+    let requiresPassword: Bool
+    let onUnlock: (String?) -> Bool
+    @State private var passwordCandidate: String = ""
+    @State private var showingMismatchError: Bool = false
+    @FocusState private var passwordFocused: Bool
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "lock.display")
-                .font(.system(size: 44, weight: .semibold))
+        VStack(spacing: 14) {
+            Image(systemName: requiresPassword ? "lock.shield" : "lock.display")
+                .font(.system(size: 42, weight: .semibold))
                 .foregroundStyle(.white)
             Text("Host bloqueado para uso remoto")
                 .font(.title3.weight(.semibold))
@@ -107,13 +119,26 @@ struct PrivacyOverlayContent: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             Text("Só você (no Mac) vê esta janela. O cliente remoto continua acessando o desktop normalmente.")
-                .font(.callout)
+                .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
-            Button {
-                onUnlock()
-            } label: {
+
+            if requiresPassword {
+                SecureField("Senha do MacStream", text: $passwordCandidate)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($passwordFocused)
+                    .frame(maxWidth: 240)
+                    .onSubmit(attemptUnlock)
+
+                if showingMismatchError {
+                    Label("Senha incorreta", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Button(action: attemptUnlock) {
                 Label("Desbloquear", systemImage: "lock.open")
                     .font(.headline)
                     .padding(.horizontal, 18)
@@ -121,8 +146,8 @@ struct PrivacyOverlayContent: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .keyboardShortcut(.cancelAction)
-            .padding(.top, 4)
+            .keyboardShortcut(.defaultAction)
+            .disabled(requiresPassword && passwordCandidate.isEmpty)
         }
         .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -135,5 +160,25 @@ struct PrivacyOverlayContent: View {
                 .stroke(.white.opacity(0.25), lineWidth: 1)
         )
         .padding(8)
+        .onAppear {
+            if requiresPassword {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    passwordFocused = true
+                }
+            }
+        }
+    }
+
+    private func attemptUnlock() {
+        let candidate: String? = requiresPassword ? passwordCandidate : nil
+        let unlocked = onUnlock(candidate)
+        if unlocked {
+            passwordCandidate = ""
+            showingMismatchError = false
+        } else {
+            showingMismatchError = true
+            passwordCandidate = ""
+            passwordFocused = true
+        }
     }
 }

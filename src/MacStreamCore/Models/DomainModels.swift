@@ -202,6 +202,27 @@ public struct PowerAssertionStatus: Codable, Equatable {
     )
 }
 
+public struct AppPasswordPolicy: Codable, Equatable {
+    /// When true, dismissing the privacy overlay requires the user to type the
+    /// app password configured in Settings (stored in the macOS Keychain).
+    public var requireOnOverlayUnlock: Bool
+
+    public init(requireOnOverlayUnlock: Bool = false) {
+        self.requireOnOverlayUnlock = requireOnOverlayUnlock
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requireOnOverlayUnlock
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        requireOnOverlayUnlock = try container.decodeIfPresent(Bool.self, forKey: .requireOnOverlayUnlock) ?? false
+    }
+
+    public static let defaults = AppPasswordPolicy()
+}
+
 public enum HostPrivacyMode: String, Codable, Equatable, CaseIterable {
     /// Cover the host screen with an in-app NSWindow. Safe — does not touch the
     /// macOS graphics session and cannot disrupt an active Moonlight stream.
@@ -775,6 +796,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
     public var audioCaptureMode: AudioCaptureMode
     public var powerPolicy: PowerPolicy
     public var hostPrivacyPolicy: HostPrivacyPolicy
+    public var appPasswordPolicy: AppPasswordPolicy
+    public var showMenuBarItem: Bool
 
     public init(
         sunshineBinaryPath: String? = nil,
@@ -783,7 +806,9 @@ public struct MacStreamHostSettings: Codable, Equatable {
         logDirectoryPath: String,
         audioCaptureMode: AudioCaptureMode = .blackHole2ch,
         powerPolicy: PowerPolicy = .defaults,
-        hostPrivacyPolicy: HostPrivacyPolicy = .defaults
+        hostPrivacyPolicy: HostPrivacyPolicy = .defaults,
+        appPasswordPolicy: AppPasswordPolicy = .defaults,
+        showMenuBarItem: Bool = true
     ) {
         self.sunshineBinaryPath = sunshineBinaryPath
         self.agentExecutablePath = agentExecutablePath
@@ -792,6 +817,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
         self.audioCaptureMode = audioCaptureMode
         self.powerPolicy = powerPolicy
         self.hostPrivacyPolicy = hostPrivacyPolicy
+        self.appPasswordPolicy = appPasswordPolicy
+        self.showMenuBarItem = showMenuBarItem
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -802,6 +829,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
         case audioCaptureMode
         case powerPolicy
         case hostPrivacyPolicy
+        case appPasswordPolicy
+        case showMenuBarItem
     }
 
     public init(from decoder: Decoder) throws {
@@ -816,6 +845,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
         audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .blackHole2ch
         powerPolicy = try container.decodeIfPresent(PowerPolicy.self, forKey: .powerPolicy) ?? .defaults
         hostPrivacyPolicy = try container.decodeIfPresent(HostPrivacyPolicy.self, forKey: .hostPrivacyPolicy) ?? .defaults
+        appPasswordPolicy = try container.decodeIfPresent(AppPasswordPolicy.self, forKey: .appPasswordPolicy) ?? .defaults
+        showMenuBarItem = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarItem) ?? true
     }
 
     public static func defaults(fileManager: FileManager = .default) -> MacStreamHostSettings {

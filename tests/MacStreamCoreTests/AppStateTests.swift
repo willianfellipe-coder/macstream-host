@@ -207,8 +207,42 @@ final class AppStateTests: XCTestCase {
         await appState.lockHostForPrivacy()
         XCTAssertTrue(appState.privacyOverlayActive)
 
-        appState.dismissPrivacyOverlay()
+        _ = appState.dismissPrivacyOverlay()
 
         XCTAssertFalse(appState.privacyOverlayActive)
+    }
+
+    @MainActor
+    func testDismissPrivacyOverlayRejectsWrongPasswordWhenRequired() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .appOverlay)
+        settings.appPasswordPolicy = AppPasswordPolicy(requireOnOverlayUnlock: true)
+        let passwordStore = InMemoryAppPasswordStore(initial: "topsecret")
+        let appState = makeTestAppState(runtimeSettings: settings, appPasswordStore: passwordStore)
+
+        await appState.lockHostForPrivacy()
+        XCTAssertTrue(appState.privacyOverlayActive)
+
+        let rejected = appState.dismissPrivacyOverlay(passwordCandidate: "wrong")
+        XCTAssertFalse(rejected)
+        XCTAssertTrue(appState.privacyOverlayActive)
+
+        let accepted = appState.dismissPrivacyOverlay(passwordCandidate: "topsecret")
+        XCTAssertTrue(accepted)
+        XCTAssertFalse(appState.privacyOverlayActive)
+    }
+
+    @MainActor
+    func testSetAppPasswordUpdatesIsAppPasswordSet() {
+        let passwordStore = InMemoryAppPasswordStore()
+        let appState = makeTestAppState(appPasswordStore: passwordStore)
+        XCTAssertFalse(appState.isAppPasswordSet)
+
+        appState.setAppPassword("hello123")
+        XCTAssertTrue(appState.isAppPasswordSet)
+        XCTAssertTrue(passwordStore.verify("hello123"))
+
+        appState.clearAppPassword()
+        XCTAssertFalse(appState.isAppPasswordSet)
     }
 }

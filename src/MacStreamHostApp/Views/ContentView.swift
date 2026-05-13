@@ -964,6 +964,9 @@ struct SettingsView: View {
     @State private var audioCaptureMode: AudioCaptureMode = .blackHole2ch
     @State private var didLoadSettings = false
     @State private var pendingConfirmation: SettingsConfirmation?
+    @State private var newPassword = ""
+    @State private var confirmPassword = ""
+    @State private var passwordFormError: String?
 
     var body: some View {
         PageContainer(title: "Settings", subtitle: "Preferências locais usadas pelo app e pelo CLI.") {
@@ -1060,6 +1063,77 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     Text(hostLockModeExplanation)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Menu bar") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Mostrar ícone na barra de menus", isOn: showMenuBarItemBinding)
+                    Text("Quando ativo, o MacStream aparece no canto da barra de menus do macOS com atalhos para iniciar/parar a sessão e bloquear o host.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Senha do app") {
+                VStack(alignment: .leading, spacing: 12) {
+                    if appState.isAppPasswordSet {
+                        Label("Uma senha está configurada no Keychain do macOS.", systemImage: "checkmark.shield")
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("Nenhuma senha configurada — o desbloqueio fica livre.", systemImage: "exclamationmark.shield")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("Exigir senha para desbloquear a tela do host", isOn: appPasswordRequireBinding)
+                        .disabled(appState.isAppPasswordSet == false)
+
+                    if appState.isAppPasswordSet == false {
+                        Text("Defina uma senha abaixo antes de ativar essa exigência.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    SecureField("Nova senha", text: $newPassword)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("Confirmar senha", text: $confirmPassword)
+                        .textFieldStyle(.roundedBorder)
+
+                    if let error = passwordFormError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    HStack {
+                        Button {
+                            attemptSavePassword()
+                        } label: {
+                            Label(appState.isAppPasswordSet ? "Atualizar senha" : "Salvar senha", systemImage: "key.fill")
+                        }
+                        .disabled(newPassword.isEmpty)
+
+                        if appState.isAppPasswordSet {
+                            Button(role: .destructive) {
+                                appState.clearAppPassword()
+                                newPassword = ""
+                                confirmPassword = ""
+                                passwordFormError = nil
+                            } label: {
+                                Label("Remover senha", systemImage: "trash")
+                            }
+                        }
+
+                        Spacer()
+                    }
+
+                    Text("Essa senha é separada da senha do macOS — fica guardada apenas no Keychain do app e protege o desbloqueio da tela do host.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1199,6 +1273,42 @@ struct SettingsView: View {
                 Task { await appState.updateHostPrivacyPolicy(policy) }
             }
         )
+    }
+
+    private var showMenuBarItemBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.showMenuBarItem },
+            set: { value in
+                Task { await appState.updateShowMenuBarItem(value) }
+            }
+        )
+    }
+
+    private var appPasswordRequireBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.appPasswordPolicy.requireOnOverlayUnlock },
+            set: { value in
+                var policy = appState.runtimeSettings.appPasswordPolicy
+                policy.requireOnOverlayUnlock = value
+                Task { await appState.updateAppPasswordPolicy(policy) }
+            }
+        )
+    }
+
+    private func attemptSavePassword() {
+        let trimmed = newPassword.trimmingCharacters(in: .whitespaces)
+        guard trimmed.isEmpty == false else {
+            passwordFormError = "A senha não pode estar em branco."
+            return
+        }
+        guard trimmed == confirmPassword.trimmingCharacters(in: .whitespaces) else {
+            passwordFormError = "As duas senhas precisam ser iguais."
+            return
+        }
+        appState.setAppPassword(trimmed)
+        newPassword = ""
+        confirmPassword = ""
+        passwordFormError = nil
     }
 
     private var hostLockModeBinding: Binding<HostPrivacyMode> {
