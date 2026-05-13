@@ -428,7 +428,9 @@ public final class AppState: ObservableObject {
 
     public func requestMacOSPermissions() async {
         let permissionsToRequest: [MacPermission] = [
-            .microphone
+            .screenRecording,
+            .microphone,
+            .accessibility
         ]
         let results = await permissionManager.requestPermissions(permissionsToRequest)
         lastPermissionRequestResults = results
@@ -618,7 +620,7 @@ public final class AppState: ObservableObject {
         dependencyInstallProgress = DependencyInstallProgress(
             id: .blackHole,
             stage: .downloading,
-            detail: "Baixando instalador oficial do BlackHole 2ch."
+            detail: "Baixando driver oficial de roteamento de áudio."
         )
 
         do {
@@ -640,6 +642,22 @@ public final class AppState: ObservableObject {
         }
 
         await refresh()
+    }
+
+    public func pollForBlackHoleInstallation(maxAttempts: Int = 20, intervalSeconds: Double = 3.0) async {
+        for _ in 0..<maxAttempts {
+            await refreshDependencies()
+            if dependencyStatus(for: .blackHole) == .pass {
+                dependencyInstallProgress = DependencyInstallProgress(
+                    id: .blackHole,
+                    stage: .completed,
+                    detail: "Roteamento de áudio detectado."
+                )
+                lastOperationMessage = "Roteamento de áudio detectado."
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
+        }
     }
 
     public func installMissingDependencies() async {
@@ -799,14 +817,14 @@ public final class AppState: ObservableObject {
 
         return [
             OnboardingStep(id: .system, title: "Verificar sistema", state: stepState(for: systemStatus), detail: "macOS 14.2+ e Apple Silicon primeiro."),
-            OnboardingStep(id: .sunshine, title: "Detectar Sunshine", state: stepState(for: dependencyStatus(.sunshine, dependencies)), detail: dependencies.first(where: { $0.id == .sunshine })?.detail ?? "Validar Sunshine."),
-            OnboardingStep(id: .blackHole, title: "Detectar BlackHole", state: stepState(for: dependencyStatus(.blackHole, dependencies)), detail: dependencies.first(where: { $0.id == .blackHole })?.detail ?? "Validar BlackHole."),
-            OnboardingStep(id: .audio, title: "Configurar áudio", state: stepState(for: audioStatus), detail: audioStatus == .pass ? "Rota de áudio validada." : "Escolha captura nativa ou BlackHole 2ch."),
+            OnboardingStep(id: .sunshine, title: "Verificar mecanismo de vídeo", state: stepState(for: dependencyStatus(.sunshine, dependencies)), detail: dependencies.first(where: { $0.id == .sunshine })?.detail ?? "Validar mecanismo de vídeo."),
+            OnboardingStep(id: .blackHole, title: "Verificar roteamento de áudio", state: stepState(for: dependencyStatus(.blackHole, dependencies)), detail: dependencies.first(where: { $0.id == .blackHole })?.detail ?? "Validar roteamento de áudio."),
+            OnboardingStep(id: .audio, title: "Configurar áudio", state: stepState(for: audioStatus), detail: audioStatus == .pass ? "Rota de áudio validada." : "Escolha captura nativa do macOS ou roteamento avançado."),
             OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.runtimeGuidanceStatus), detail: dashboard.permissionsStatus.runtimeGuidanceStatus == .pass ? "Permissões conhecidas OK." : "Permissões do app são diagnóstico; erros reais de captura aparecem no teste da engine."),
             OnboardingStep(id: .configuration, title: "Gerar configuração", state: hasConfig ? .passed : .pending, detail: runtimeSettings.sunshineConfigURL.path),
-            OnboardingStep(id: .startSunshine, title: "Iniciar Sunshine", state: dashboard.sunshineStatus.state == .running ? .passed : .pending, detail: dashboard.sunshineStatus.state.displayName),
-            OnboardingStep(id: .webUI, title: "Abrir Web UI", state: dashboard.sunshineStatus.webUIReachable ? .passed : .pending, detail: "https://localhost:47990"),
-            OnboardingStep(id: .moonlightPairing, title: "Parear Moonlight", state: allMoonlightItemsDone ? .passed : .active, detail: "Use um IP listado e conclua o checklist no app."),
+            OnboardingStep(id: .startSunshine, title: "Iniciar streaming", state: dashboard.sunshineStatus.state == .running ? .passed : .pending, detail: dashboard.sunshineStatus.state.displayName),
+            OnboardingStep(id: .webUI, title: "Abrir painel avançado", state: dashboard.sunshineStatus.webUIReachable ? .passed : .pending, detail: "https://localhost:47990"),
+            OnboardingStep(id: .moonlightPairing, title: "Parear cliente Moonlight", state: allMoonlightItemsDone ? .passed : .active, detail: "Use um IP listado e conclua o checklist no app."),
             OnboardingStep(id: .diagnostics, title: "Exportar diagnóstico", state: health.status == .failing ? .active : .pending, detail: "Gere um pacote de suporte se o teste falhar.")
         ]
     }
@@ -820,6 +838,10 @@ public final class AppState: ObservableObject {
 
     private func dependencyStatus(_ id: DependencyID, _ dependencies: [DependencyStatus]) -> CheckStatus {
         dependencies.first(where: { $0.id == id })?.status ?? .unknown
+    }
+
+    public func dependencyStatus(for id: DependencyID) -> CheckStatus {
+        dependencyStatus(id, dependencyStatuses)
     }
 
     private func stepState(for status: CheckStatus) -> OnboardingStepState {

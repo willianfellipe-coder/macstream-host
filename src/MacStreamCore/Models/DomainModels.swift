@@ -254,6 +254,14 @@ public enum DependencyID: String, Codable, Hashable, CaseIterable {
 
     public var displayName: String {
         switch self {
+        case .sunshine: return "Mecanismo de vídeo"
+        case .blackHole: return "Roteamento de áudio"
+        case .moonlight: return "Cliente Moonlight"
+        }
+    }
+
+    public var technicalName: String {
+        switch self {
         case .sunshine: return "Sunshine"
         case .blackHole: return "BlackHole 2ch"
         case .moonlight: return "Moonlight"
@@ -291,6 +299,13 @@ public enum ManagedDependencyID: String, Codable, Hashable, CaseIterable {
     case blackHole
 
     public var displayName: String {
+        switch self {
+        case .sunshine: return "Mecanismo de vídeo"
+        case .blackHole: return "Roteamento de áudio"
+        }
+    }
+
+    public var technicalName: String {
         switch self {
         case .sunshine: return "Sunshine"
         case .blackHole: return "BlackHole 2ch"

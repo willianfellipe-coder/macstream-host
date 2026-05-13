@@ -158,7 +158,7 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(
             permissions.requestedPermissions,
-            [.microphone]
+            [.screenRecording, .microphone, .accessibility]
         )
         XCTAssertFalse(appState.lastPermissionRequestResults.isEmpty)
     }
