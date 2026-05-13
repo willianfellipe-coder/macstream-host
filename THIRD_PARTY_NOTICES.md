@@ -8,8 +8,10 @@ This file tracks third-party projects that MacStream Host integrates with, detec
 - Upstream: https://github.com/LizardByte/Sunshine
 - Role: Moonlight-compatible host/server.
 - License: GPL-3.0.
-- Current MVP use: external install detection or managed user-scoped install from a pinned upstream macOS DMG. Sunshine is not bundled in the MacStream Host source tree or DMG.
-- Managed install target: see `UPSTREAMS.md` for version, URL and checksum.
+- Release artifact: the pinned upstream `Sunshine.app` is staged into the MacStream Host application bundle at `Contents/Resources/sunshine/Sunshine.app`. It is unmodified — see `UPSTREAMS.md` for version, URL and SHA-256.
+- Source tree: Sunshine is not committed to this repository. `scripts/fetch_sunshine.sh` downloads the pinned DMG from the upstream release page and stages it under `Resources/sunshine/` (git-ignored) before packaging.
+- Corresponding source: matches the GitHub release tag pinned in `UPSTREAMS.md`. The release page provides upstream sources and build instructions.
+- Fallback: if the bundled `Sunshine.app` is missing at runtime, MacStream Host can re-download the same pinned DMG (SHA-256 verified) into user-scoped Application Support.
 - Affiliation: independent upstream project; MacStream Host is not officially affiliated.
 
 ## BlackHole

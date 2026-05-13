@@ -9,19 +9,26 @@ MacStream Host is intended to be GPL-3.0-or-later software.
 - Do not add an EULA or restriction that conflicts with GPL rights.
 - Preserve upstream notices and attribution.
 - Document all bundled third-party binaries with exact refs and corresponding source.
+- Re-staging is reproducible: `scripts/fetch_sunshine.sh` is the single entry point that fetches the pinned Sunshine DMG by SHA-256.
 
 ## Sunshine And BlackHole
 
-Sunshine and BlackHole are independent GPL projects. The safest MVP path is to detect or orchestrate official upstream builds without modifying them.
+Sunshine and BlackHole are independent GPL projects. MacStream Host carries them unmodified.
 
-If future releases bundle Sunshine or BlackHole binaries:
+### Sunshine — bundled
 
-- Pin exact upstream refs in `UPSTREAMS.md`.
-- Include or link corresponding source for the exact binary.
-- Publish all local patches.
-- Include build scripts sufficient to reproduce the bundled binary.
-- Update `THIRD_PARTY_NOTICES.md`.
-- Include license text and copyright notices in the app and release artifact.
+The MacStream Host application bundle embeds the pinned upstream `Sunshine.app` at `Contents/Resources/sunshine/Sunshine.app`. To satisfy GPL-3.0 §6 we must, for any binary release that ships this bundle:
+
+- Pin the exact upstream ref (release tag) and SHA-256 in `UPSTREAMS.md`.
+- Link to the corresponding source — the upstream release page hosts both the DMG and the source tarball/tag.
+- Ship the Sunshine license text inside the bundle (`Contents/Resources/sunshine/LICENSE` when present; the upstream LICENSE is also reproduced in the app About screen).
+- Publish any local patches (currently: none).
+- Provide the build script that reproduces the staging step (`scripts/fetch_sunshine.sh`).
+- Update `THIRD_PARTY_NOTICES.md` whenever the pinned ref changes.
+
+### BlackHole — guided install, not bundled
+
+BlackHole is delivered via the upstream `.pkg` installer, opened from MacStream Host after SHA-256 verification. We do not bundle the kext/driver in the app bundle or DMG, so the standard rules in `UPSTREAMS.md` apply (pin the version, document the source, no modifications).
 
 ## Distribution Strategy
 
