@@ -1053,8 +1053,15 @@ struct SettingsView: View {
                     }
                     Toggle("Oferecer bloqueio de tela ao iniciar", isOn: hostLockOfferBinding)
                     Toggle("Permitir bloqueio manual do host", isOn: hostLockManualBinding)
-                    Text("O bloqueio do host é experimental e deve ser validado no teste prático antes de virar padrão.")
+                    Picker("Modo de bloqueio do host", selection: hostLockModeBinding) {
+                        ForEach(HostPrivacyMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(hostLockModeExplanation)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -1192,6 +1199,26 @@ struct SettingsView: View {
                 Task { await appState.updateHostPrivacyPolicy(policy) }
             }
         )
+    }
+
+    private var hostLockModeBinding: Binding<HostPrivacyMode> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.mode },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.mode = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
+    private var hostLockModeExplanation: String {
+        switch appState.runtimeSettings.hostPrivacyPolicy.mode {
+        case .appOverlay:
+            return "Cobre a tela do host com uma janela preta dentro do MacStream. Não toca na sessão gráfica, então o streaming Moonlight nunca cai."
+        case .systemSuspend:
+            return "Usa o bloqueio nativo do macOS (CGSession). Ainda não validado em streaming ativo — pode interromper vídeo/áudio/teclado se o macOS suspender a sessão gráfica."
+        }
     }
 
     private func runConfirmedAction(_ confirmation: SettingsConfirmation) async {
