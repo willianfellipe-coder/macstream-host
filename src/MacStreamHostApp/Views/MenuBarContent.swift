@@ -15,6 +15,13 @@ struct MenuBarContent: View {
 
         Divider()
 
+        // Status rows (non-interactive).
+        Text(keepAwakeLine)
+        Text(agentLine)
+        Text(privacyLine)
+
+        Divider()
+
         if isRunning {
             Button("Parar modo remoto") {
                 Task { await appState.stopRemoteWorkMode() }
@@ -29,6 +36,14 @@ struct MenuBarContent: View {
         }
 
         if isRunning {
+            Button("Reiniciar mecanismo de vídeo") {
+                Task { await appState.restartSunshine() }
+            }
+
+            Button("Regerar configuração + reiniciar") {
+                Task { await appState.regenerateAndRestartVideo() }
+            }
+
             Button("Bloquear host") {
                 Task { await appState.lockHostForPrivacy() }
             }
@@ -59,6 +74,22 @@ struct MenuBarContent: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
+    }
+
+    private var keepAwakeLine: String {
+        appState.powerAssertionStatus.isActive
+            ? "Keep-awake: ativo (Mac não dorme)"
+            : "Keep-awake: inativo"
+    }
+
+    private var agentLine: String {
+        appState.agentStatus.isRunning
+            ? "Agente residente: ativo"
+            : "Agente residente: aguardando"
+    }
+
+    private var privacyLine: String {
+        "Privacidade: \(appState.hostPrivacyStatus.displayLabel)"
     }
 
     private var isRunning: Bool {
