@@ -84,9 +84,21 @@ struct ContentView: View {
 struct DashboardView: View {
     @EnvironmentObject private var appState: AppState
 
+    private var pairingAddresses: [String] {
+        var addresses = appState.dashboard.networkStatus.localAddresses
+        if let tailscale = appState.dashboard.networkStatus.tailscaleAddress {
+            addresses.append(tailscale)
+        }
+        return addresses
+    }
+
     var body: some View {
         PageContainer(title: "Remote Work", subtitle: "Prepare este Mac para uso remoto produtivo a partir do iPad ou outro cliente Moonlight.") {
-            RemoteWorkBanner(report: appState.remoteWorkSession)
+            RemoteWorkBanner(
+                report: appState.remoteWorkSession,
+                pairingAddresses: pairingAddresses,
+                onCopyAddress: { address in appState.copyPairingAddress(address) }
+            )
 
             GroupBox("Ações principais") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -209,7 +221,7 @@ struct SetupView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Setup", subtitle: "Checklist seguro para preparar Sunshine, áudio, rede e pareamento.") {
+        PageContainer(title: "Setup", subtitle: "Checklist seguro para preparar vídeo, áudio, rede e pareamento.") {
             OnboardingStepList(steps: appState.onboardingSteps)
 
             GroupBox("Preflight") {
@@ -329,6 +341,7 @@ struct SetupView: View {
 
 struct DependenciesView: View {
     @EnvironmentObject private var appState: AppState
+    @State private var showBlackHoleExplainer = false
 
     var body: some View {
         PageContainer(title: "Components", subtitle: "Componentes gerenciados pelo MacStream para video, audio e pareamento.") {
@@ -347,16 +360,20 @@ struct DependenciesView: View {
                             Label("Instalar dependências ausentes", systemImage: "square.and.arrow.down")
                         }
 
-                        Button {
-                            Task { await appState.installManagedSunshine() }
-                        } label: {
-                            Label("Instalar Sunshine", systemImage: "sun.max")
+                        if appState.dependencyStatus(for: .sunshine) != .pass {
+                            Button {
+                                Task { await appState.installManagedSunshine() }
+                            } label: {
+                                Label("Restaurar mecanismo de vídeo", systemImage: "arrow.down.circle")
+                            }
                         }
 
-                        Button {
-                            Task { await appState.installBlackHole() }
-                        } label: {
-                            Label("Instalar BlackHole", systemImage: "speaker.wave.2")
+                        if appState.dependencyStatus(for: .blackHole) != .pass {
+                            Button {
+                                showBlackHoleExplainer = true
+                            } label: {
+                                Label("Configurar roteamento de áudio", systemImage: "speaker.wave.2")
+                            }
                         }
                     }
 
@@ -427,6 +444,18 @@ struct DependenciesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .sheet(isPresented: $showBlackHoleExplainer) {
+            BlackHoleInstallExplainer(
+                onCancel: { showBlackHoleExplainer = false },
+                onConfirm: {
+                    showBlackHoleExplainer = false
+                    Task {
+                        await appState.installBlackHole()
+                        await appState.pollForBlackHoleInstallation()
+                    }
+                }
+            )
+        }
     }
 
     private func status(for stage: DependencyInstallStage) -> CheckStatus {
@@ -439,7 +468,7 @@ struct DependenciesView: View {
 
     private func artifactNotes(_ artifact: DependencyArtifact) -> String {
         [
-            artifact.isPrerelease ? "Sunshine macOS fixado em prerelease upstream para obter artefato DMG." : nil,
+            artifact.isPrerelease ? "Versão upstream fixada em prerelease para obter artefato macOS." : nil,
             artifact.requiresAdministrator ? "Pode solicitar senha de administrador no Installer.app." : nil,
             artifact.requiresReboot ? "Pode exigir reinicialização após instalar." : nil
         ]
@@ -714,7 +743,7 @@ struct NetworkView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Network", subtitle: "Diagnóstico local de IP, portas comuns do Sunshine e orientação para VPN mesh.") {
+        PageContainer(title: "Network", subtitle: "Diagnóstico local de IP, portas do mecanismo de streaming e orientação para VPN mesh.") {
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(appState.dashboard.networkStatus.localAddresses, id: \.self) { address in
@@ -776,14 +805,14 @@ struct MoonlightView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Moonlight", subtitle: "Guia de pareamento sem depender de API não documentada do Sunshine.") {
+        PageContainer(title: "Moonlight", subtitle: "Guia de pareamento sem depender de APIs internas do mecanismo de vídeo.") {
             GroupBox("Acesso rápido") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Button {
                             Task { await appState.openSunshineWebUI() }
                         } label: {
-                            Label("Abrir Web UI do Sunshine", systemImage: "safari")
+                            Label("Abrir painel avançado", systemImage: "safari")
                         }
 
                         Spacer()
@@ -940,7 +969,7 @@ struct SettingsView: View {
         PageContainer(title: "Settings", subtitle: "Preferências locais usadas pelo app e pelo CLI.") {
             GroupBox("Paths") {
                 VStack(alignment: .leading, spacing: 12) {
-                    TextField("Sunshine binary path", text: $sunshineBinaryPath)
+                    TextField("Caminho manual do mecanismo de vídeo", text: $sunshineBinaryPath)
                         .textFieldStyle(.roundedBorder)
                     TextField("Config directory", text: $configDirectoryPath)
                         .textFieldStyle(.roundedBorder)
@@ -1250,30 +1279,218 @@ struct OperationalStateBanner: View {
     }
 }
 
-struct RemoteWorkBanner: View {
-    let report: RemoteWorkSessionReport
+struct BlackHoleInstallExplainer: View {
+    var onCancel: () -> Void
+    var onConfirm: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            StatusIcon(status: report.state.checkStatus)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(report.state.displayName)
-                    .font(.title3.weight(.semibold))
-                Text(report.nextStep)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if !report.blockers.isEmpty {
-                    Text(report.blockers.joined(separator: " "))
-                        .foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 14) {
+                Image(systemName: "speaker.wave.2.circle.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Configurar roteamento de áudio")
+                        .font(.title2.weight(.bold))
+                    Text("O MacStream usa um driver oficial para capturar o áudio do sistema durante o streaming.")
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            VStack(alignment: .leading, spacing: 10) {
+                StepLine(number: 1, title: "Download verificado", detail: "O MacStream baixa o instalador oficial e confere o checksum SHA-256 antes de abrir.")
+                StepLine(number: 2, title: "Instalador padrão do macOS", detail: "O Installer.app abre. Pode pedir sua senha de administrador para instalar o driver de sistema.")
+                StepLine(number: 3, title: "Reinicialização (em alguns casos)", detail: "Drivers de áudio podem exigir reiniciar o Mac para ficar ativos. Você pode reabrir o MacStream depois sem perda de progresso.")
+                StepLine(number: 4, title: "Detecção automática", detail: "Quando o driver aparecer, o MacStream marca esta etapa como concluída sem mais cliques.")
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancelar", role: .cancel) { onCancel() }
+                    .keyboardShortcut(.cancelAction)
+                Button {
+                    onConfirm()
+                } label: {
+                    Label("Baixar e abrir instalador", systemImage: "arrow.down.circle.fill")
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 560)
+    }
+}
+
+private struct StepLine: View {
+    let number: Int
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text("\(number)")
+                .font(.headline.monospacedDigit())
+                .frame(width: 28, height: 28)
+                .background(.blue.opacity(0.15), in: Circle())
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(detail)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Spacer()
         }
-        .padding(14)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+    }
+}
+
+struct RemoteWorkBanner: View {
+    let report: RemoteWorkSessionReport
+    let pairingAddresses: [String]
+    var onCopyAddress: (String) -> Void = { _ in }
+
+    init(
+        report: RemoteWorkSessionReport,
+        pairingAddresses: [String] = [],
+        onCopyAddress: @escaping (String) -> Void = { _ in }
+    ) {
+        self.report = report
+        self.pairingAddresses = pairingAddresses
+        self.onCopyAddress = onCopyAddress
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: headlineSymbol)
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(accentColor)
+                    .frame(width: 44, height: 44)
+                    .background(accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(headlineTitle)
+                        .font(.title2.weight(.bold))
+                    Text(report.nextStep)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+
+            if !report.blockers.isEmpty {
+                BannerMessageList(
+                    icon: "exclamationmark.triangle.fill",
+                    color: .orange,
+                    title: "Bloqueios a resolver",
+                    items: report.blockers
+                )
+            }
+
+            if !report.warnings.isEmpty {
+                BannerMessageList(
+                    icon: "info.circle.fill",
+                    color: .yellow,
+                    title: "Avisos",
+                    items: report.warnings
+                )
+            }
+
+            if report.state == .running && !pairingAddresses.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Endereços para conectar pelo Moonlight", systemImage: "ipad.and.iphone")
+                        .font(.headline)
+                    ForEach(pairingAddresses, id: \.self) { address in
+                        HStack {
+                            Text(address)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button {
+                                onCopyAddress(address)
+                            } label: {
+                                Label("Copiar", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(.background.tertiary, in: RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(accentColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(accentColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var headlineTitle: String {
+        switch report.state {
+        case .running:
+            return "Modo remoto ativo — conecte pelo Moonlight"
+        case .ready:
+            return "Pronto para começar"
+        case .starting:
+            return "Iniciando modo remoto..."
+        case .stopping:
+            return "Encerrando sessão..."
+        case .degraded:
+            return "Sessão ativa com avisos"
+        case .blocked:
+            return "Bloqueios impedem iniciar"
+        case .notReady:
+            return "Configuração inicial pendente"
+        }
+    }
+
+    private var headlineSymbol: String {
+        switch report.state {
+        case .running: return "dot.radiowaves.left.and.right"
+        case .ready: return "play.circle.fill"
+        case .starting, .stopping: return "arrow.triangle.2.circlepath"
+        case .degraded: return "exclamationmark.triangle.fill"
+        case .blocked: return "xmark.octagon.fill"
+        case .notReady: return "wand.and.stars"
+        }
+    }
+
+    private var accentColor: Color {
+        switch report.state.checkStatus {
+        case .pass: return .green
+        case .warning: return .orange
+        case .fail: return .red
+        case .unknown: return .blue
+        }
+    }
+}
+
+private struct BannerMessageList: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let items: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon)
+                .font(.headline)
+                .foregroundStyle(color)
+            ForEach(items, id: \.self) { item in
+                Text("• \(item)")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
