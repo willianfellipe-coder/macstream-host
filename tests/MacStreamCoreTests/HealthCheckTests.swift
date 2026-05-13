@@ -52,9 +52,9 @@ final class HealthCheckTests: XCTestCase {
         XCTAssertTrue(result.checks.contains(where: { $0.id == .network }))
     }
 
-    func testHealthCheckFailsWhenSunshineLogsScreenRecordingError() async {
+    func testHealthCheckFailsWhenSunshineLogsScreenRecordingErrorAndIsNotRunning() async {
         let service = DefaultHealthCheckService(
-            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .stopped, webUIReachable: false)),
             blackHoleManager: MockBlackHoleManager(status: .installed),
             permissionManager: MockPermissionManager(),
             audioDeviceManager: MockAudioDeviceManager(),
@@ -74,7 +74,7 @@ final class HealthCheckTests: XCTestCase {
 
     func testHealthCheckFailsWhenSunshineCrashesWithDisplayNamesNilInsertion() async {
         let service = DefaultHealthCheckService(
-            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .stopped, webUIReachable: false)),
             blackHoleManager: MockBlackHoleManager(status: .installed),
             permissionManager: MockPermissionManager(),
             audioDeviceManager: MockAudioDeviceManager(),
@@ -97,6 +97,26 @@ final class HealthCheckTests: XCTestCase {
 
         XCTAssertEqual(screenCheck?.status, .fail)
         XCTAssertTrue(screenCheck?.detail.contains("Gravação de Tela") == true)
+    }
+
+    func testHealthCheckSkipsStaleScreenRecordingFailureWhenSunshineIsRunning() async {
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(),
+            audioDeviceManager: MockAudioDeviceManager(),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager(entries: [
+                LogEntry(subsystem: "Sunshine stderr", message: "*** NSInvalidArgumentException initWithObjects:forKeys:count:"),
+                LogEntry(subsystem: "Sunshine stderr", message: "+[AVVideo displayNames] + 252")
+            ])
+        )
+
+        let result = await service.runHealthCheck()
+        let screenCheck = result.checks.first { $0.id == .sunshineScreenRecording }
+
+        XCTAssertNil(screenCheck, "Sunshine running means TCC works now — stale logs must not raise the banner.")
     }
 
     func testHealthCheckIgnoresStaleSunshineErrorsBeforeLatestStartup() async {

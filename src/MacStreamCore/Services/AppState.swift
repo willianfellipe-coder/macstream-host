@@ -519,13 +519,15 @@ public final class AppState: ObservableObject {
     /// Resets the macOS TCC entry for the embedded video engine (Sunshine bundle
     /// id) so a clean grant flow can run. macOS invalidates Screen Recording
     /// grants when the host bundle is replaced; this command clears any zombie
-    /// entry, then opens the Screen Recording pane in System Settings.
+    /// entry, truncates the engine logs so stale crash dumps stop tripping the
+    /// detection banner, then opens the Screen Recording pane in System Settings.
     public func resetSunshineScreenRecordingGrant() async {
         let result = await commandRunner.run(
             executablePath: "/usr/bin/tccutil",
             arguments: ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"],
             timeout: 5
         )
+        truncateSunshineLogs()
         if result.exitCode == 0 {
             lastOperationMessage = "Permissão do motor de vídeo resetada. Abra Ajustes do Sistema e ative o toggle para 'Sunshine'."
         } else {
@@ -535,6 +537,16 @@ public final class AppState: ObservableObject {
             lastOperationMessage = "Não foi possível resetar a permissão: \(detail)"
         }
         try? await permissionManager.openSettings(for: .screenRecording)
+        await refresh()
+    }
+
+    private func truncateSunshineLogs() {
+        let logDir = runtimeSettings.logDirectoryURL
+        for fileName in ["sunshine.out.log", "sunshine.err.log"] {
+            let url = logDir.appendingPathComponent(fileName)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            try? Data().write(to: url, options: .atomic)
+        }
     }
 
     /// Convenience flag derived from the current health check — true when the

@@ -194,23 +194,29 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
 
         let currentStartupMessages = messagesFromCurrentSunshineStartup(sunshineMessages)
         let joined = currentStartupMessages.joined(separator: "\n").lowercased()
+        let sunshineRunning = await sunshineManager.status().state == .running
 
-        if detectsScreenRecordingTccCrash(joined) {
-            return HealthCheck(
-                id: .sunshineScreenRecording,
-                title: "Permissão de Gravação de Tela",
-                status: .fail,
-                detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard e ative o toggle em Ajustes do Sistema."
-            )
-        }
+        // If the engine is currently running, the user already fixed the TCC
+        // issue (Sunshine couldn't have started capturing otherwise). Stale
+        // crash dumps in sunshine.err.log don't represent the live state.
+        if sunshineRunning == false {
+            if detectsScreenRecordingTccCrash(joined) {
+                return HealthCheck(
+                    id: .sunshineScreenRecording,
+                    title: "Permissão de Gravação de Tela",
+                    status: .fail,
+                    detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard e ative o toggle em Ajustes do Sistema."
+                )
+            }
 
-        if joined.contains("no screen capture permission") {
-            return HealthCheck(
-                id: .sunshineScreenRecording,
-                title: "Permissão de Gravação de Tela",
-                status: .fail,
-                detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
-            )
+            if joined.contains("no screen capture permission") {
+                return HealthCheck(
+                    id: .sunshineScreenRecording,
+                    title: "Permissão de Gravação de Tela",
+                    status: .fail,
+                    detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
+                )
+            }
         }
 
         if joined.contains("video failed to find working encoder")
