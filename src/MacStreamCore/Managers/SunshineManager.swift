@@ -401,27 +401,50 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
     private let candidatePaths: [String]
     private let environment: [String: String]
     private let fileManager: FileManager
+    private let bundleResourceURL: URL?
 
     public init(
         candidatePaths: [String]? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        bundleResourceURL: URL? = Bundle.main.resourceURL
     ) {
         self.candidatePaths = candidatePaths ?? Self.defaultCandidatePaths()
         self.environment = environment
         self.fileManager = fileManager
+        self.bundleResourceURL = bundleResourceURL
     }
 
     public func resolveBinary() -> URL? {
-        for path in pathsFromEnvironment() + candidatePaths {
-            let expandedPath = (path as NSString).expandingTildeInPath
+        for path in bundleResourcePaths() {
+            if fileManager.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
 
-            if fileManager.isExecutableFile(atPath: expandedPath) {
-                return URL(fileURLWithPath: expandedPath)
+        for path in candidatePaths {
+            let expanded = (path as NSString).expandingTildeInPath
+            if fileManager.isExecutableFile(atPath: expanded) {
+                return URL(fileURLWithPath: expanded)
+            }
+        }
+
+        for path in pathsFromEnvironment() {
+            if fileManager.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
             }
         }
 
         return nil
+    }
+
+    private func bundleResourcePaths() -> [String] {
+        guard let bundleResourceURL else { return [] }
+        return [
+            bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine").path,
+            bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/sunshine").path,
+            bundleResourceURL.appendingPathComponent("sunshine/bin/sunshine").path
+        ]
     }
 
     private func pathsFromEnvironment() -> [String] {
@@ -436,21 +459,17 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
     }
 
     private static func defaultCandidatePaths() -> [String] {
-        var paths = [
+        [
+            "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine",
+            "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/sunshine",
+            "/Applications/MacStream Host.app/Contents/Resources/sunshine/bin/sunshine",
             "/opt/homebrew/bin/sunshine",
             "/usr/local/bin/sunshine",
+            "/Applications/Sunshine.app/Contents/MacOS/Sunshine",
             "/Applications/Sunshine.app/Contents/MacOS/sunshine",
-            "~/Applications/Sunshine.app/Contents/MacOS/sunshine",
-            "/Applications/MacStream Host.app/Contents/Resources/sunshine/bin/sunshine"
+            "~/Applications/Sunshine.app/Contents/MacOS/Sunshine",
+            "~/Applications/Sunshine.app/Contents/MacOS/sunshine"
         ]
-
-        if let resourcePath = Bundle.main.resourceURL?
-            .appendingPathComponent("sunshine/bin/sunshine")
-            .path {
-            paths.insert(resourcePath, at: 0)
-        }
-
-        return paths
     }
 }
 

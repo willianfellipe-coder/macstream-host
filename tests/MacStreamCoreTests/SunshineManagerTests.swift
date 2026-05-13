@@ -62,10 +62,74 @@ final class SunshineManagerTests: XCTestCase {
 
         let resolver = DefaultSunshineBinaryResolver(
             candidatePaths: [],
-            environment: ["PATH": directory.path]
+            environment: ["PATH": directory.path],
+            bundleResourceURL: nil
         )
 
         XCTAssertEqual(resolver.resolveBinary()?.path, sunshineURL.path)
+    }
+
+    func testResolverPrefersBundledSunshineOverPathAndCandidates() throws {
+        let bundleResourceURL = try makeTemporaryDirectory()
+        let bundledSunshine = bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
+        try FileManager.default.createDirectory(at: bundledSunshine.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try writeExecutableStub(at: bundledSunshine)
+
+        let pathDirectory = try makeTemporaryDirectory()
+        let pathSunshine = pathDirectory.appendingPathComponent("sunshine")
+        try writeExecutableStub(at: pathSunshine)
+
+        let candidateDirectory = try makeTemporaryDirectory()
+        let candidateSunshine = candidateDirectory.appendingPathComponent("sunshine")
+        try writeExecutableStub(at: candidateSunshine)
+
+        let resolver = DefaultSunshineBinaryResolver(
+            candidatePaths: [candidateSunshine.path],
+            environment: ["PATH": pathDirectory.path],
+            bundleResourceURL: bundleResourceURL
+        )
+
+        XCTAssertEqual(resolver.resolveBinary()?.path, bundledSunshine.path)
+    }
+
+    func testResolverFallsBackToCandidatesWhenBundleMissingAndBeforePath() throws {
+        let bundleResourceURL = try makeTemporaryDirectory()
+
+        let candidateDirectory = try makeTemporaryDirectory()
+        let candidateSunshine = candidateDirectory.appendingPathComponent("sunshine")
+        try writeExecutableStub(at: candidateSunshine)
+
+        let pathDirectory = try makeTemporaryDirectory()
+        let pathSunshine = pathDirectory.appendingPathComponent("sunshine")
+        try writeExecutableStub(at: pathSunshine)
+
+        let resolver = DefaultSunshineBinaryResolver(
+            candidatePaths: [candidateSunshine.path],
+            environment: ["PATH": pathDirectory.path],
+            bundleResourceURL: bundleResourceURL
+        )
+
+        XCTAssertEqual(resolver.resolveBinary()?.path, candidateSunshine.path)
+    }
+
+    func testResolverAcceptsLegacyBundleBinLayout() throws {
+        let bundleResourceURL = try makeTemporaryDirectory()
+        let legacyBinary = bundleResourceURL.appendingPathComponent("sunshine/bin/sunshine")
+        try FileManager.default.createDirectory(at: legacyBinary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try writeExecutableStub(at: legacyBinary)
+
+        let resolver = DefaultSunshineBinaryResolver(
+            candidatePaths: [],
+            environment: [:],
+            bundleResourceURL: bundleResourceURL
+        )
+
+        XCTAssertEqual(resolver.resolveBinary()?.path, legacyBinary.path)
+    }
+
+    private func writeExecutableStub(at url: URL) throws {
+        try "#!/bin/sh\nexit 0\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     func testPgrepInspectorUsesExitCode() async {

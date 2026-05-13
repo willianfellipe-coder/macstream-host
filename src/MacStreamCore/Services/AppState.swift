@@ -581,7 +581,7 @@ public final class AppState: ObservableObject {
         dependencyInstallProgress = DependencyInstallProgress(
             id: .sunshine,
             stage: .downloading,
-            detail: "Baixando Sunshine do release upstream fixado."
+            detail: "Restaurando mecanismo de vídeo a partir do release upstream fixado."
         )
 
         do {
