@@ -28,4 +28,20 @@ final class StatusRuleTests: XCTestCase {
         XCTAssertTrue(permissions.criticalPermissionsSatisfied)
         XCTAssertEqual(permissions.aggregateStatus, .warning)
     }
+
+    func testHostPrivacyDefaultStateIsPassNotWarning() {
+        let idle = HostPrivacyStatus()
+        XCTAssertEqual(idle.lastAction, .none)
+        // Idle privacy is a normal default — the dashboard must not flag it
+        // with a warning icon. lockSucceeded/lockFailed/lockRequested carry
+        // their own meaningful statuses.
+        XCTAssertEqual(idle.checkStatus, .pass)
+        XCTAssertEqual(idle.displayLabel, "Pronta")
+    }
+
+    func testHostPrivacyLockedStateShowsPassWithFriendlyLabel() {
+        let locked = HostPrivacyStatus(lastAction: .lockSucceeded, detail: "Tela ocultada.")
+        XCTAssertEqual(locked.checkStatus, .pass)
+        XCTAssertEqual(locked.displayLabel, "Tela bloqueada")
+    }
 }

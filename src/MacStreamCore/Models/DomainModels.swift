@@ -285,7 +285,7 @@ public struct HostPrivacyStatus: Codable, Equatable {
     public init(
         policy: HostPrivacyPolicy = .defaults,
         lastAction: HostPrivacyAction = .none,
-        detail: String = "Privacidade do host aguardando acao do usuario."
+        detail: String = "Privacidade do host pronta para uso."
     ) {
         self.policy = policy
         self.lastAction = lastAction
@@ -294,9 +294,22 @@ public struct HostPrivacyStatus: Codable, Equatable {
 
     public var checkStatus: CheckStatus {
         switch lastAction {
-        case .lockSucceeded: return .pass
+        // .none is the default state — user simply hasn't asked for a lock yet,
+        // not a problem the dashboard needs to flag.
+        case .none, .lockSucceeded: return .pass
         case .lockFailed: return .fail
-        case .none, .lockRequested: return .warning
+        case .lockRequested: return .warning
+        }
+    }
+
+    /// Short human label suitable for dashboard cards (avoids raw enum values
+    /// like "none" leaking into the UI).
+    public var displayLabel: String {
+        switch lastAction {
+        case .none: return "Pronta"
+        case .lockRequested: return "Bloqueando…"
+        case .lockSucceeded: return "Tela bloqueada"
+        case .lockFailed: return "Falha no bloqueio"
         }
     }
 

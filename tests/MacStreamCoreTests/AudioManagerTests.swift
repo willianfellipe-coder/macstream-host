@@ -60,10 +60,24 @@ final class AudioManagerTests: XCTestCase {
         XCTAssertEqual(status, .pass)
     }
 
-    func testAudioDeviceManagerWarnsWhenOnlyGeneralAudioDevicesExist() async {
+    func testAudioDeviceManagerPassesNativeModeWhenOutputDeviceIsPresent() async {
         let manager = DefaultAudioDeviceManager(
             audioDeviceProvider: FakeAudioDeviceProvider(devices: [
                 AudioDevice(id: "1", name: "Built-in Output", channels: 2, isInput: false, isOutput: true, status: .available)
+            ])
+        )
+
+        let mode = await manager.preferredCaptureMode()
+        let status = await manager.validateAudioRoute()
+
+        XCTAssertEqual(mode, .nativeSystemAudio)
+        XCTAssertEqual(status, .pass)
+    }
+
+    func testAudioDeviceManagerWarnsNativeModeWhenOnlyInputDevicesExist() async {
+        let manager = DefaultAudioDeviceManager(
+            audioDeviceProvider: FakeAudioDeviceProvider(devices: [
+                AudioDevice(id: "1", name: "Built-in Microphone", channels: 1, isInput: true, isOutput: false, status: .available)
             ])
         )
 

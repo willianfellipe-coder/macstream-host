@@ -93,6 +93,11 @@ public final class DefaultAudioDeviceManager: AudioDeviceManaging {
         let preferredMode = await preferredCaptureMode()
 
         if preferredMode == .nativeSystemAudio {
+            // Native capture is a fully supported mode on macOS 14.2+. If we
+            // can enumerate at least one output device through CoreAudio there
+            // is a route the video engine can use; no warning is necessary.
+            let hasOutput = devices.contains(where: { $0.isOutput })
+            if hasOutput { return .pass }
             return devices.isEmpty ? .fail : .warning
         }
 

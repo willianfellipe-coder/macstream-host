@@ -203,7 +203,7 @@ struct DashboardView: View {
 
                 StatusPanel(
                     title: "Privacidade",
-                    value: appState.hostPrivacyStatus.lastAction.rawValue,
+                    value: appState.hostPrivacyStatus.displayLabel,
                     detail: appState.hostPrivacyStatus.detail,
                     status: appState.hostPrivacyStatus.checkStatus
                 )
