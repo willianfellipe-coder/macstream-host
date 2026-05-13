@@ -1215,7 +1215,7 @@ struct SettingsView: View {
     private var hostLockModeExplanation: String {
         switch appState.runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:
-            return "Cobre a tela do host com uma janela preta dentro do MacStream. Não toca na sessão gráfica, então o streaming Moonlight nunca cai."
+            return "Pinta a tela do host de preto apenas para quem estiver fisicamente no Mac. O cliente remoto continua vendo e usando o desktop normalmente — comportamento equivalente ao 'tela em branco' do TeamViewer/AnyDesk."
         case .systemSuspend:
             return "Usa o bloqueio nativo do macOS (CGSession). Ainda não validado em streaming ativo — pode interromper vídeo/áudio/teclado se o macOS suspender a sessão gráfica."
         }

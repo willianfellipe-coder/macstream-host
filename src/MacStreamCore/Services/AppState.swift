@@ -398,7 +398,7 @@ public final class AppState: ObservableObject {
         switch runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:
             privacyOverlayActive = true
-            lastOperationMessage = "Overlay de privacidade ativada. Clique 'Desbloquear' para encerrar."
+            lastOperationMessage = "Tela do host ocultada. O cliente remoto continua vendo o desktop. Clique 'Desbloquear' no Mac para sair."
         case .systemSuspend:
             await runRemoteWorkOperation {
                 try await remoteWorkSessionManager.lockHostForPrivacy()
@@ -408,7 +408,7 @@ public final class AppState: ObservableObject {
 
     public func dismissPrivacyOverlay() {
         privacyOverlayActive = false
-        lastOperationMessage = "Overlay de privacidade encerrada."
+        lastOperationMessage = "Tela do host restaurada."
     }
 
     public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {

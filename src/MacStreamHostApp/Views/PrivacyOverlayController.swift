@@ -6,15 +6,22 @@ import SwiftUI
 
 @MainActor
 final class PrivacyOverlayController {
-    private var windows: [NSWindow] = []
+    private var backdropWindows: [NSWindow] = []
+    private var unlockPanel: NSWindow?
     private let onUnlock: () -> Void
 
     init(onUnlock: @escaping () -> Void) {
         self.onUnlock = onUnlock
     }
 
+    /// Builds a multi-window blackout that is invisible to screen capture.
+    /// Backdrop windows cover every display with a solid black surface; the
+    /// unlock panel floats over the main screen and is the only target that
+    /// captures input. Setting `sharingType = .none` removes both layers from
+    /// CGWindowList and ScreenCaptureKit feeds, so a remote Moonlight viewer
+    /// still sees the live desktop and can keep working through the Mac.
     func show() {
-        guard windows.isEmpty else { return }
+        guard backdropWindows.isEmpty else { return }
 
         for screen in NSScreen.screens {
             let window = NSWindow(
@@ -28,66 +35,105 @@ final class PrivacyOverlayController {
             window.backgroundColor = .black
             window.isOpaque = true
             window.isMovable = false
-            window.ignoresMouseEvents = false
+            window.ignoresMouseEvents = true
+            window.sharingType = .none
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             window.hasShadow = false
+            window.orderFrontRegardless()
+            backdropWindows.append(window)
+        }
+
+        if let mainScreen = NSScreen.main {
+            let panelSize = NSSize(width: 380, height: 220)
+            let origin = NSPoint(
+                x: mainScreen.frame.midX - panelSize.width / 2,
+                y: mainScreen.frame.midY - panelSize.height / 2
+            )
+            let panel = KeyableBorderlessWindow(
+                contentRect: NSRect(origin: origin, size: panelSize),
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false,
+                screen: mainScreen
+            )
+            panel.level = .screenSaver
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = false
+            panel.sharingType = .none
+            panel.ignoresMouseEvents = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
             let hosting = NSHostingController(
                 rootView: PrivacyOverlayContent(onUnlock: { [weak self] in
                     self?.onUnlock()
                 })
             )
-            hosting.view.frame = NSRect(origin: .zero, size: screen.frame.size)
-            window.contentView = hosting.view
+            hosting.view.frame = NSRect(origin: .zero, size: panelSize)
+            panel.contentView = hosting.view
 
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
-            windows.append(window)
+            panel.makeKeyAndOrderFront(nil)
+            panel.orderFrontRegardless()
+            unlockPanel = panel
         }
 
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func hide() {
-        for window in windows {
-            window.orderOut(nil)
-        }
-        windows.removeAll()
+        for window in backdropWindows { window.orderOut(nil) }
+        backdropWindows.removeAll()
+        unlockPanel?.orderOut(nil)
+        unlockPanel = nil
     }
+}
+
+private final class KeyableBorderlessWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
 
 struct PrivacyOverlayContent: View {
     let onUnlock: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 22) {
-                Image(systemName: "lock.display")
-                    .font(.system(size: 64, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.9))
-                Text("Host bloqueado para uso remoto")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundStyle(.white)
-                Text("Esta tela ficou opaca enquanto o iPad usa o Mac via Moonlight. O streaming continua sem interrupção.")
-                    .font(.title3)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white.opacity(0.75))
-                    .frame(maxWidth: 520)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    onUnlock()
-                } label: {
-                    Label("Desbloquear", systemImage: "lock.open")
-                        .font(.headline)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.cancelAction)
-                .padding(.top, 8)
+        VStack(spacing: 16) {
+            Image(systemName: "lock.display")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(.white)
+            Text("Host bloqueado para uso remoto")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Só você (no Mac) vê esta janela. O cliente remoto continua acessando o desktop normalmente.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                onUnlock()
+            } label: {
+                Label("Desbloquear", systemImage: "lock.open")
+                    .font(.headline)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.cancelAction)
+            .padding(.top, 4)
         }
+        .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.black.opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(.white.opacity(0.25), lineWidth: 1)
+        )
+        .padding(8)
     }
 }
