@@ -71,4 +71,30 @@ final class HealthCheckTests: XCTestCase {
         XCTAssertEqual(runtimeCheck?.status, .fail)
         XCTAssertEqual(result.status, .failing)
     }
+
+    func testHealthCheckIgnoresStaleSunshineErrorsBeforeLatestStartup() async {
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(permissionsStatus: MacOSPermissionsStatus(checks: [
+                PermissionCheck(id: .screenRecording, status: .granted, detail: "OK"),
+                PermissionCheck(id: .microphone, status: .granted, detail: "OK"),
+                PermissionCheck(id: .localNetwork, status: .granted, detail: "OK")
+            ])),
+            audioDeviceManager: MockAudioDeviceManager(),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager(entries: [
+                LogEntry(subsystem: "Sunshine stdout", message: "Error: No screen capture permission!"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Sunshine version: 2025.924.154138 commit: abc"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Found H.264 encoder: h264_videotoolbox [videotoolbox]"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Configuration UI available at [https://localhost:47990]")
+            ])
+        )
+
+        let result = await service.runHealthCheck()
+        let runtimeCheck = result.checks.first { $0.id == .sunshineRuntime }
+
+        XCTAssertEqual(runtimeCheck?.status, .pass)
+    }
 }

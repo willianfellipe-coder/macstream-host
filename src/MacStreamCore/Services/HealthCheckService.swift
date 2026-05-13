@@ -150,7 +150,8 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             return nil
         }
 
-        let joined = sunshineMessages.joined(separator: "\n").lowercased()
+        let currentStartupMessages = messagesFromCurrentSunshineStartup(sunshineMessages)
+        let joined = currentStartupMessages.joined(separator: "\n").lowercased()
 
         if joined.contains("no screen capture permission") {
             return HealthCheck(
@@ -186,6 +187,16 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             status: .pass,
             detail: "Nenhum erro crítico recente foi encontrado nos logs do Sunshine."
         )
+    }
+
+    private func messagesFromCurrentSunshineStartup(_ messages: [String]) -> [String] {
+        guard let startupIndex = messages.indices.reversed().first(where: {
+            messages[$0].localizedCaseInsensitiveContains("Sunshine version:")
+        }) else {
+            return messages
+        }
+
+        return Array(messages[startupIndex...])
     }
 
     private func audioDetail(for status: CheckStatus) -> String {
