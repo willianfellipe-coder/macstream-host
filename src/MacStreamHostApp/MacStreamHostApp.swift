@@ -28,6 +28,9 @@ struct MacStreamHostApp: App {
                             },
                             onUnlock: { [weak appState] candidate in
                                 appState?.dismissPrivacyOverlay(passwordCandidate: candidate) ?? false
+                            },
+                            onDimResult: { [weak appState] result in
+                                appState?.reportPrivacyLockDimResult(result.summary, didDimAny: result.didDimAny)
                             }
                         )
                     }

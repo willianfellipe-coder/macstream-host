@@ -8,33 +8,37 @@ import SwiftUI
 final class PrivacyOverlayController {
     private let brightness = DisplayBrightnessController()
     private var unlockPanel: NSWindow?
-    private var fallbackBackdrops: [NSWindow] = []
+    private var lastResult: DisplayDimResult?
     private let requiresPassword: () -> Bool
     private let onUnlock: (String?) -> Bool
+    private let onDimResult: (DisplayDimResult) -> Void
 
     init(
         requiresPassword: @escaping () -> Bool,
-        onUnlock: @escaping (String?) -> Bool
+        onUnlock: @escaping (String?) -> Bool,
+        onDimResult: @escaping (DisplayDimResult) -> Void = { _ in }
     ) {
         self.requiresPassword = requiresPassword
         self.onUnlock = onUnlock
+        self.onDimResult = onDimResult
     }
 
-    /// Drops every physical display to brightness 0 so the local viewer goes
-    /// dark while the framebuffer continues to be produced normally — the
-    /// Moonlight client keeps seeing the live desktop and can keep working
-    /// through the Mac. A small "Desbloquear" panel floats on the main screen
-    /// so the local user can dismiss the overlay; it is the only surface that
-    /// captures input. If DisplayServices is unavailable (rare hardware /
-    /// virtualization), we fall back to the legacy NSWindow blackout — that
-    /// path also covers the remote screen, but at least the lock still works.
+    var lastDimSummary: String? { lastResult?.summary }
+
+    /// Drops every built-in physical display to brightness 0 so the local
+    /// viewer goes dark while the framebuffer continues to be produced
+    /// normally — Moonlight keeps seeing the live desktop and the remote user
+    /// can keep working through the Mac. Sidecar/AirPlay displays are skipped
+    /// because dimming a wireless display can affect its framebuffer. A small
+    /// "Desbloquear" panel floats on the main screen so the local user can
+    /// dismiss the overlay. We **never** fall back to an NSWindow blackout —
+    /// that overlay leaks into ScreenCaptureKit and into the Moonlight feed.
     func show() {
         guard unlockPanel == nil else { return }
 
-        let dimmed = brightness.dimAllDisplays()
-        if dimmed == false {
-            installFallbackBackdrops()
-        }
+        let result = brightness.dimAllDisplays()
+        lastResult = result
+        onDimResult(result)
 
         if let mainScreen = NSScreen.main {
             let panelSize = NSSize(width: 380, height: 220)
@@ -78,32 +82,9 @@ final class PrivacyOverlayController {
 
     func hide() {
         brightness.restoreAllDisplays()
-        for window in fallbackBackdrops { window.orderOut(nil) }
-        fallbackBackdrops.removeAll()
         unlockPanel?.orderOut(nil)
         unlockPanel = nil
-    }
-
-    private func installFallbackBackdrops() {
-        for screen in NSScreen.screens {
-            let window = NSWindow(
-                contentRect: screen.frame,
-                styleMask: .borderless,
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
-            window.level = .screenSaver
-            window.backgroundColor = .black
-            window.isOpaque = true
-            window.isMovable = false
-            window.ignoresMouseEvents = true
-            window.sharingType = .none
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            window.hasShadow = false
-            window.orderFrontRegardless()
-            fallbackBackdrops.append(window)
-        }
+        lastResult = nil
     }
 }
 

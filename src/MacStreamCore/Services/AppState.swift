@@ -425,6 +425,21 @@ public final class AppState: ObservableObject {
     /// the caller must pass the user-entered candidate. Returns true on success,
     /// false when the candidate is wrong (UI should display an error).
     @discardableResult
+    /// Hook the UI layer can call after the overlay has tried to dim displays.
+    /// Surfaces the result through the same lastOperationMessage channel as
+    /// other ops so the user immediately sees whether the lock actually
+    /// affected the local screen or stayed in panel-only mode.
+    public func reportPrivacyLockDimResult(_ summary: String, didDimAny: Bool) {
+        if didDimAny {
+            lastOperationMessage = "Tela do host ocultada. \(summary)"
+        } else {
+            lastOperationMessage = "Não foi possível escurecer este Mac. " +
+                "O painel de desbloqueio está visível, mas a tela física não foi escurecida — " +
+                "verifique se o display interno está conectado ao sistema."
+        }
+    }
+
+    @discardableResult
     public func dismissPrivacyOverlay(passwordCandidate: String? = nil) -> Bool {
         if overlayUnlockRequiresPassword {
             guard let candidate = passwordCandidate,
@@ -500,6 +515,17 @@ public final class AppState: ObservableObject {
 
     public func restartSunshine() async {
         await runSunshineOperation(successMessage: "Processo Sunshine owned pelo MacStream Host reiniciado.") {
+            try await sunshineManager.restart()
+        }
+    }
+
+    /// Rebuilds the engine configuration (sunshine.conf + apps.json) using
+    /// the current settings, then restarts the video engine. Useful when the
+    /// audio mode changes, the config gets corrupted, or settings shift while
+    /// the engine is live.
+    public func regenerateAndRestartVideo() async {
+        await runSunshineOperation(successMessage: "Configuração regerada e mecanismo de vídeo reiniciado.") {
+            _ = try configurationManager.writeDefaultFiles(overwrite: true, audioSink: runtimeSettings.audioSink)
             try await sunshineManager.restart()
         }
     }
