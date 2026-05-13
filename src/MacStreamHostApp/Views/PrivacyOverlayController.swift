@@ -6,8 +6,9 @@ import SwiftUI
 
 @MainActor
 final class PrivacyOverlayController {
-    private var backdropWindows: [NSWindow] = []
+    private let brightness = DisplayBrightnessController()
     private var unlockPanel: NSWindow?
+    private var fallbackBackdrops: [NSWindow] = []
     private let requiresPassword: () -> Bool
     private let onUnlock: (String?) -> Bool
 
@@ -19,33 +20,20 @@ final class PrivacyOverlayController {
         self.onUnlock = onUnlock
     }
 
-    /// Builds a multi-window blackout that is invisible to screen capture.
-    /// Backdrop windows cover every display with a solid black surface; the
-    /// unlock panel floats over the main screen and is the only target that
-    /// captures input. Setting `sharingType = .none` removes both layers from
-    /// CGWindowList and ScreenCaptureKit feeds, so a remote Moonlight viewer
-    /// still sees the live desktop and can keep working through the Mac.
+    /// Drops every physical display to brightness 0 so the local viewer goes
+    /// dark while the framebuffer continues to be produced normally — the
+    /// Moonlight client keeps seeing the live desktop and can keep working
+    /// through the Mac. A small "Desbloquear" panel floats on the main screen
+    /// so the local user can dismiss the overlay; it is the only surface that
+    /// captures input. If DisplayServices is unavailable (rare hardware /
+    /// virtualization), we fall back to the legacy NSWindow blackout — that
+    /// path also covers the remote screen, but at least the lock still works.
     func show() {
-        guard backdropWindows.isEmpty else { return }
+        guard unlockPanel == nil else { return }
 
-        for screen in NSScreen.screens {
-            let window = NSWindow(
-                contentRect: screen.frame,
-                styleMask: .borderless,
-                backing: .buffered,
-                defer: false,
-                screen: screen
-            )
-            window.level = .screenSaver
-            window.backgroundColor = .black
-            window.isOpaque = true
-            window.isMovable = false
-            window.ignoresMouseEvents = true
-            window.sharingType = .none
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            window.hasShadow = false
-            window.orderFrontRegardless()
-            backdropWindows.append(window)
+        let dimmed = brightness.dimAllDisplays()
+        if dimmed == false {
+            installFallbackBackdrops()
         }
 
         if let mainScreen = NSScreen.main {
@@ -89,10 +77,33 @@ final class PrivacyOverlayController {
     }
 
     func hide() {
-        for window in backdropWindows { window.orderOut(nil) }
-        backdropWindows.removeAll()
+        brightness.restoreAllDisplays()
+        for window in fallbackBackdrops { window.orderOut(nil) }
+        fallbackBackdrops.removeAll()
         unlockPanel?.orderOut(nil)
         unlockPanel = nil
+    }
+
+    private func installFallbackBackdrops() {
+        for screen in NSScreen.screens {
+            let window = NSWindow(
+                contentRect: screen.frame,
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false,
+                screen: screen
+            )
+            window.level = .screenSaver
+            window.backgroundColor = .black
+            window.isOpaque = true
+            window.isMovable = false
+            window.ignoresMouseEvents = true
+            window.sharingType = .none
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            window.hasShadow = false
+            window.orderFrontRegardless()
+            fallbackBackdrops.append(window)
+        }
     }
 }
 
