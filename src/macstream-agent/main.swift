@@ -48,9 +48,33 @@ struct MacStreamAgent {
     }
 }
 
+struct AgentLogger {
+    enum Level: String { case info = "INFO", warn = "WARN", error = "ERROR" }
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    func info(_ message: String) { emit(.info, message, stream: stdout) }
+    func warn(_ message: String) { emit(.warn, message, stream: stderr) }
+    func error(_ message: String) { emit(.error, message, stream: stderr) }
+
+    private let stdout = FileHandle.standardOutput
+    private let stderr = FileHandle.standardError
+
+    private func emit(_ level: Level, _ message: String, stream: FileHandle) {
+        let line = "[\(Self.formatter.string(from: Date()))] [\(level.rawValue)] [agent] \(message)\n"
+        if let data = line.data(using: .utf8) {
+            try? stream.write(contentsOf: data)
+        }
+    }
+}
+
 private final class AgentRuntime {
     private let settingsManager = FileSettingsManager()
     private let commandDecoder: JSONDecoder
+    private let logger = AgentLogger()
     private var lastCommandID: UUID?
     private var powerManager: PowerAssertionManaging?
     private var privacyManager: HostPrivacyManaging?
@@ -61,6 +85,7 @@ private final class AgentRuntime {
     }
 
     func run() async {
+        logger.info("macstream-agent started (pid \(ProcessInfo.processInfo.processIdentifier), version \(AppBuildInfo.current.version))")
         var shouldExit = false
 
         while shouldExit == false {
@@ -73,14 +98,21 @@ private final class AgentRuntime {
             if let command = readCommand(from: settings.agentCommandURL),
                command.id != lastCommandID {
                 lastCommandID = command.id
+                logger.info("received command \(command.kind.rawValue) (id \(command.id.uuidString))")
                 shouldExit = await handle(command, runtime: runtime, settings: settings)
             }
 
             let report = await makeReport(runtime: runtime, settings: settings)
-            try? runtime.agent.writeReport(report)
+            do {
+                try runtime.agent.writeReport(report)
+            } catch {
+                logger.warn("failed to write status report: \(error.localizedDescription)")
+            }
 
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
+
+        logger.info("macstream-agent exiting")
     }
 
     private func handle(
@@ -95,7 +127,9 @@ private final class AgentRuntime {
                 _ = try runtime.configuration.writeDefaultFiles(overwrite: false, audioSink: settings.audioSink)
                 _ = try await runtime.power.acquire(policy: settings.powerPolicy)
                 try await runtime.sunshine.start()
+                logger.info("started remote work mode")
             } catch {
+                logger.error("failed to start remote work mode: \(error.localizedDescription)")
                 let report = await makeReport(
                     runtime: runtime,
                     settings: settings,
@@ -109,8 +143,11 @@ private final class AgentRuntime {
         case .stopRemoteWork:
             do {
                 try await runtime.sunshine.stop()
+                logger.info("stopped remote work mode")
             } catch SunshineManagerError.noOwnedProcess {
+                logger.info("stop requested but no MacStream-owned video process was running")
             } catch {
+                logger.warn("stop encountered an error: \(error.localizedDescription)")
                 let report = await makeReport(
                     runtime: runtime,
                     settings: settings,
@@ -119,13 +156,17 @@ private final class AgentRuntime {
                 )
                 try? runtime.agent.writeReport(report)
             }
-            _ = try? await runtime.power.release()
+            if (try? await runtime.power.release()) == nil {
+                logger.warn("power assertion release failed")
+            }
             return false
 
         case .lockHost:
             do {
                 _ = try await runtime.privacy.lockHost()
+                logger.info("system-suspend host lock issued")
             } catch {
+                logger.warn("host lock failed: \(error.localizedDescription)")
                 let report = await makeReport(
                     runtime: runtime,
                     settings: settings,
@@ -137,9 +178,11 @@ private final class AgentRuntime {
             return false
 
         case .shutdown:
+            logger.info("shutdown command received")
             do {
                 try await runtime.sunshine.stop()
             } catch {
+                logger.warn("shutdown stop failed: \(error.localizedDescription)")
             }
             _ = try? await runtime.power.release()
             return true
