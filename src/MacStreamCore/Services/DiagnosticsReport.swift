@@ -10,6 +10,8 @@ public struct DiagnosticsReport: Codable, Equatable {
     public var audioDevices: [AudioDevice]
     public var preferredAudioMode: AudioCaptureMode
     public var launchAgentStatus: LaunchAgentStatus
+    public var dependencies: [DependencyStatus]
+    public var buildInfo: AppBuildInfo
 
     public init(
         generatedAt: Date = Date(),
@@ -18,7 +20,9 @@ public struct DiagnosticsReport: Codable, Equatable {
         health: HealthCheckResult,
         audioDevices: [AudioDevice],
         preferredAudioMode: AudioCaptureMode,
-        launchAgentStatus: LaunchAgentStatus
+        launchAgentStatus: LaunchAgentStatus,
+        dependencies: [DependencyStatus] = [],
+        buildInfo: AppBuildInfo = .current
     ) {
         self.generatedAt = generatedAt
         self.settings = settings
@@ -27,5 +31,7 @@ public struct DiagnosticsReport: Codable, Equatable {
         self.audioDevices = audioDevices
         self.preferredAudioMode = preferredAudioMode
         self.launchAgentStatus = launchAgentStatus
+        self.dependencies = dependencies
+        self.buildInfo = buildInfo
     }
 }

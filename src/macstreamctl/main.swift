@@ -50,6 +50,10 @@ struct MacStreamCTL {
         if options.json {
             let report = await state.diagnosticsReport()
             printJSON(report)
+            let status = await state.healthCheckResult.status
+            if options.strict && status != .pass {
+                Foundation.exit(1)
+            }
             return
         }
 
@@ -61,8 +65,13 @@ struct MacStreamCTL {
         }
 
         print("")
-        print("Result: \(await state.healthCheckResult.status.rawValue.uppercased())")
+        let status = await state.healthCheckResult.status
+        print("Result: \(status.rawValue.uppercased())")
         print("Next action: \(await state.healthCheckResult.recommendedNextStep)")
+
+        if options.strict && status != .pass {
+            Foundation.exit(1)
+        }
     }
 
     private static func printPaths(arguments: [String]) {
@@ -112,53 +121,61 @@ struct MacStreamCTL {
     private static func preflight(arguments: [String]) async {
         let options = parseRuntimeOptions(arguments)
         let state = await makeAppState(options: options)
-        let configurationManager = await state.configurationManager
-        let runtimeSettings = await state.runtimeSettings
+        await state.runPreflight(
+            startAfterValidation: options.startAfterPreflight,
+            overwriteConfig: options.overwrite
+        )
 
-        do {
-            let results = try configurationManager.writeDefaultFiles(
-                overwrite: options.overwrite,
-                audioSink: runtimeSettings.audioSink
-            )
-            print("MacStream Host preflight")
+        guard let result = await state.lastPreflightResult else {
+            print("Preflight failed: \(await state.lastOperationMessage ?? "unknown error")")
+            Foundation.exit(1)
+        }
+
+        if options.json {
+            printJSON(result)
+            if options.strict && !result.blockers.isEmpty {
+                Foundation.exit(1)
+            }
+            return
+        }
+
+        print("MacStream Host preflight")
+        print("")
+        print("Configuration:")
+        for write in result.configurationWrites {
+            print("- \(write.action.description): \(write.url.path)")
+        }
+
+        if result.startedSunshine {
             print("")
-            print("Configuration:")
-            for result in results {
-                print("- \(result.action.description): \(result.url.path)")
-            }
+            print("Sunshine: start requested with MacStream Host ownership.")
+        }
 
-            if options.startAfterPreflight {
-                try await state.sunshineManager.start()
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                print("")
-                print("Sunshine: start requested with MacStream Host ownership.")
-            }
-
-            await state.refresh()
-
-            if options.json {
-                let report = await state.diagnosticsReport()
-                printJSON(report)
-                return
-            }
-
-            let dashboard = await state.dashboard
+        let dashboard = result.dashboard
+        print("")
+        print("Readiness:")
+        print("- Operational state: \(result.operationalState.displayName)")
+        print("- Sunshine: \(dashboard.sunshineStatus.state.displayName)")
+        print("- Web UI: \(dashboard.sunshineStatus.webUIReachable ? "reachable" : "not reachable")")
+        print("- BlackHole: \(dashboard.blackHoleStatus.displayName)")
+        print("- Permissions: \(dashboard.permissionsStatus.aggregateStatus.displayName)")
+        print("- Network: \(dashboard.networkStatus.aggregateStatus.displayName)")
+        print("- Local IPs: \(dashboard.networkStatus.localAddresses.joined(separator: ", "))")
+        if let tailscale = dashboard.networkStatus.tailscaleAddress {
+            print("- Tailscale: \(tailscale)")
+        }
+        if !result.blockers.isEmpty {
             print("")
-            print("Readiness:")
-            print("- Sunshine: \(dashboard.sunshineStatus.state.displayName)")
-            print("- Web UI: \(dashboard.sunshineStatus.webUIReachable ? "reachable" : "not reachable")")
-            print("- BlackHole: \(dashboard.blackHoleStatus.displayName)")
-            print("- Permissions: \(dashboard.permissionsStatus.aggregateStatus.displayName)")
-            print("- Network: \(dashboard.networkStatus.aggregateStatus.displayName)")
-            print("- Local IPs: \(dashboard.networkStatus.localAddresses.joined(separator: ", "))")
-            if let tailscale = dashboard.networkStatus.tailscaleAddress {
-                print("- Tailscale: \(tailscale)")
+            print("Blockers:")
+            for blocker in result.blockers {
+                print("- \(blocker)")
             }
-            print("")
-            print("Next action: \(await state.healthCheckResult.recommendedNextStep)")
-            print("Pairing: open the Sunshine Web UI, then add this Mac in Moonlight using one of the listed IPs.")
-        } catch {
-            print("Preflight failed: \(error.localizedDescription)")
+        }
+        print("")
+        print("Next action: \(result.nextStep)")
+        print("Pairing: open the Sunshine Web UI, then add this Mac in Moonlight using one of the listed IPs.")
+
+        if options.strict && !result.blockers.isEmpty {
             Foundation.exit(1)
         }
     }
@@ -328,11 +345,23 @@ struct MacStreamCTL {
         )
 
         do {
-            let result = try await service.writeBundle(to: outputURL, diagnostics: report)
+            let bundleOptions = SupportBundleOptions(
+                parentDirectoryPath: outputURL.path,
+                includeZip: options.includeZip,
+                maxLogLines: options.maxLogLines
+            )
+            let result = try await service.writeBundle(
+                options: bundleOptions,
+                diagnostics: report,
+                buildInfo: .current
+            )
             if options.json {
                 printJSON(result)
             } else {
                 print("Support bundle: \(result.directoryPath)")
+                if let archivePath = result.archivePath {
+                    print("Archive: \(archivePath)")
+                }
                 for file in result.files {
                     print("- \(file)")
                 }
@@ -407,12 +436,14 @@ struct MacStreamCTL {
 
         Shared options:
           --json                 Print JSON for doctor/status/logs/reset.
+          --strict               Fail doctor/preflight when blockers remain.
           --sunshine-binary PATH Override Sunshine binary path.
           --config-dir PATH      Override config directory.
           --log-dir PATH         Override log directory.
           --native-audio         Prefer native macOS audio capture.
           --audio-sink NAME      Prefer BlackHole when NAME is "BlackHole 2ch".
           --output PATH          Output parent directory for support-bundle.
+          --zip                  Create a .zip archive for support-bundle.
           --overwrite            Backup and replace config during preflight/configure.
           --start                Start Sunshine after preflight config validation.
 
@@ -588,6 +619,10 @@ struct MacStreamCTL {
             switch argument {
             case "--json":
                 options.json = true
+            case "--strict":
+                options.strict = true
+            case "--zip":
+                options.includeZip = true
             case "--confirm":
                 options.confirmReset = true
             case "--overwrite":
@@ -710,6 +745,8 @@ private struct LaunchAgentCLIOptions {
 
 private struct RuntimeCLIOptions {
     var json = false
+    var strict = false
+    var includeZip = false
     var confirmReset = false
     var overwrite = false
     var startAfterPreflight = false

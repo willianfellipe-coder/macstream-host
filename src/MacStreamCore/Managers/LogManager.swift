@@ -53,6 +53,18 @@ public final class DefaultLogManager: LogManaging {
         return lines.joined(separator: "\n")
     }
 
+    public func rotateLogs(maxBytes: UInt64 = 5 * 1024 * 1024, backupCount: Int = 3) throws {
+        try fileManager.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        for fileName in ["sunshine.out.log", "sunshine.err.log", "macstream.log"] {
+            try rotate(
+                logURL: logDirectoryURL.appendingPathComponent(fileName),
+                maxBytes: maxBytes,
+                backupCount: backupCount
+            )
+        }
+    }
+
     private func recentLines(from url: URL, maxLines: Int) -> [String] {
         guard fileManager.fileExists(atPath: url.path),
               let contents = try? String(contentsOf: url, encoding: .utf8) else {
@@ -63,6 +75,41 @@ public final class DefaultLogManager: LogManaging {
             .split(whereSeparator: \.isNewline)
             .suffix(maxLines)
             .map(String.init)
+    }
+
+    private func rotate(logURL: URL, maxBytes: UInt64, backupCount: Int) throws {
+        guard backupCount > 0,
+              fileManager.fileExists(atPath: logURL.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: logURL.path),
+              let size = attributes[.size] as? NSNumber,
+              size.uint64Value > maxBytes else {
+            return
+        }
+
+        for index in stride(from: backupCount - 1, through: 1, by: -1) {
+            let source = rotatedURL(for: logURL, index: index)
+            let destination = rotatedURL(for: logURL, index: index + 1)
+
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+
+            if fileManager.fileExists(atPath: source.path) {
+                try fileManager.moveItem(at: source, to: destination)
+            }
+        }
+
+        let firstBackup = rotatedURL(for: logURL, index: 1)
+        if fileManager.fileExists(atPath: firstBackup.path) {
+            try fileManager.removeItem(at: firstBackup)
+        }
+
+        try fileManager.moveItem(at: logURL, to: firstBackup)
+        fileManager.createFile(atPath: logURL.path, contents: nil)
+    }
+
+    private func rotatedURL(for logURL: URL, index: Int) -> URL {
+        logURL.deletingLastPathComponent().appendingPathComponent("\(logURL.lastPathComponent).\(index)")
     }
 
     private func mask(_ value: String) -> String {

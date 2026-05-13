@@ -260,6 +260,7 @@ public final class ProcessSunshineLauncher: SunshineProcessLaunching {
 
     public func launch(binaryURL: URL, configURL: URL, logDirectoryURL: URL) throws -> SunshineOwnedProcess {
         try fileManager.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+        try? DefaultLogManager(logDirectoryURL: logDirectoryURL, fileManager: fileManager).rotateLogs(maxBytes: 5 * 1024 * 1024, backupCount: 3)
 
         let stdoutURL = logDirectoryURL.appendingPathComponent("sunshine.out.log")
         let stderrURL = logDirectoryURL.appendingPathComponent("sunshine.err.log")

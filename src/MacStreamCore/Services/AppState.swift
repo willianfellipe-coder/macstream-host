@@ -2,6 +2,9 @@
 
 import Combine
 import Foundation
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor
 public final class AppState: ObservableObject {
@@ -12,6 +15,11 @@ public final class AppState: ObservableObject {
     @Published public private(set) var lastSunshineOperationMessage: String?
     @Published public private(set) var runtimeSettings: MacStreamHostSettings
     @Published public private(set) var lastOperationMessage: String?
+    @Published public private(set) var dependencyStatuses: [DependencyStatus]
+    @Published public private(set) var onboardingSteps: [OnboardingStep]
+    @Published public private(set) var operationalState: HostOperationalState
+    @Published public private(set) var lastPreflightResult: PreflightResult?
+    @Published public private(set) var completedMoonlightChecklistItems: Set<MoonlightChecklistItemID>
 
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
@@ -57,6 +65,11 @@ public final class AppState: ObservableObject {
         self.isSunshineOperationInProgress = false
         self.lastSunshineOperationMessage = nil
         self.lastOperationMessage = nil
+        self.dependencyStatuses = []
+        self.onboardingSteps = []
+        self.operationalState = .unknown
+        self.lastPreflightResult = nil
+        self.completedMoonlightChecklistItems = []
     }
 
     public static func localDiagnostics(settingsManager: SettingsManaging = FileSettingsManager()) -> AppState {
@@ -135,6 +148,10 @@ public final class AppState: ObservableObject {
         let permissions = await permissionManager.currentStatus()
         let network = await networkDiagnosticsManager.runDiagnostics()
         let health = await healthCheckService.runHealthCheck()
+        let dependencies = await makeDependencyStatuses(
+            sunshine: sunshine,
+            blackHole: blackHole
+        )
 
         dashboard = DashboardSnapshot(
             sunshineStatus: sunshine,
@@ -143,6 +160,7 @@ public final class AppState: ObservableObject {
             networkStatus: network,
             recommendedNextStep: health.recommendedNextStep
         )
+        dependencyStatuses = dependencies
         setupChecklist = makeSetupChecklist(
             sunshine: sunshine,
             blackHole: blackHole,
@@ -150,6 +168,69 @@ public final class AppState: ObservableObject {
             network: network
         )
         healthCheckResult = health
+        operationalState = determineOperationalState(
+            sunshine: sunshine,
+            blackHole: blackHole,
+            permissions: permissions,
+            health: health
+        )
+        onboardingSteps = makeOnboardingSteps(
+            dashboard: dashboard,
+            health: health,
+            dependencies: dependencies
+        )
+    }
+
+    public func refreshDependencies() async {
+        let sunshine = await sunshineManager.status()
+        let blackHole = await blackHoleManager.installationStatus()
+        dependencyStatuses = await makeDependencyStatuses(sunshine: sunshine, blackHole: blackHole)
+    }
+
+    public func runPreflight(startAfterValidation: Bool, overwriteConfig: Bool) async {
+        var writes: [ConfigurationFileWriteResult] = []
+        var startedSunshine = false
+
+        do {
+            try logManager.rotateLogs(maxBytes: 5 * 1024 * 1024, backupCount: 3)
+            writes = try configurationManager.writeDefaultFiles(
+                overwrite: overwriteConfig,
+                audioSink: runtimeSettings.audioSink
+            )
+
+            if startAfterValidation {
+                try await sunshineManager.start()
+                startedSunshine = true
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+            }
+
+            await refresh()
+            let blockers = healthCheckResult.checks
+                .filter { $0.status == .fail }
+                .map(\.detail)
+            lastPreflightResult = PreflightResult(
+                configurationWrites: writes,
+                dashboard: dashboard,
+                health: healthCheckResult,
+                operationalState: operationalState,
+                blockers: blockers,
+                nextStep: healthCheckResult.recommendedNextStep,
+                startedSunshine: startedSunshine
+            )
+            lastOperationMessage = blockers.isEmpty ? "Preflight concluído." : "Preflight concluído com bloqueios."
+        } catch {
+            await refresh()
+            lastPreflightResult = PreflightResult(
+                configurationWrites: writes,
+                dashboard: dashboard,
+                health: healthCheckResult,
+                operationalState: .blocked,
+                blockers: [error.localizedDescription],
+                nextStep: "Corrija o erro reportado e execute o preflight novamente.",
+                startedSunshine: startedSunshine
+            )
+            lastOperationMessage = error.localizedDescription
+        }
     }
 
     public func createDefaultSunshineConfiguration() async {
@@ -242,7 +323,9 @@ public final class AppState: ObservableObject {
             health: healthCheckResult,
             audioDevices: await audioDeviceManager.listAudioDevices(),
             preferredAudioMode: await audioDeviceManager.preferredCaptureMode(),
-            launchAgentStatus: await launchAgentManager.status()
+            launchAgentStatus: await launchAgentManager.status(),
+            dependencies: dependencyStatuses,
+            buildInfo: .current
         )
     }
 
@@ -257,7 +340,11 @@ public final class AppState: ObservableObject {
                 logManager: logManager,
                 configurationManager: configurationManager
             )
-            let result = try await service.writeBundle(to: parentDirectory, diagnostics: report)
+            let result = try await service.writeBundle(
+                options: SupportBundleOptions(parentDirectoryPath: parentDirectory.path),
+                diagnostics: report,
+                buildInfo: .current
+            )
             lastOperationMessage = "Pacote de suporte criado em \(result.directoryPath)."
             return result
         } catch {
@@ -265,6 +352,45 @@ public final class AppState: ObservableObject {
             await refresh()
             return nil
         }
+    }
+
+    public func exportSupportBundleZip() async -> SupportBundleResult? {
+        let outputURL = logManager.logDirectoryURL.appendingPathComponent("SupportBundles", isDirectory: true)
+        do {
+            let report = await diagnosticsReport()
+            let service = DefaultSupportBundleService(
+                logManager: logManager,
+                configurationManager: configurationManager
+            )
+            let result = try await service.writeBundle(
+                options: SupportBundleOptions(parentDirectoryPath: outputURL.path, includeZip: true),
+                diagnostics: report,
+                buildInfo: .current
+            )
+            lastOperationMessage = "Pacote de suporte criado em \(result.archivePath ?? result.directoryPath)."
+            return result
+        } catch {
+            lastOperationMessage = error.localizedDescription
+            await refresh()
+            return nil
+        }
+    }
+
+    public func copyPairingAddress(_ address: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+        #endif
+        lastOperationMessage = "Endereço copiado: \(address)"
+    }
+
+    public func markMoonlightChecklistItemComplete(_ item: MoonlightChecklistItemID) {
+        completedMoonlightChecklistItems.insert(item)
+        onboardingSteps = makeOnboardingSteps(
+            dashboard: dashboard,
+            health: healthCheckResult,
+            dependencies: dependencyStatuses
+        )
     }
 
     public func softReset() async {
@@ -317,6 +443,116 @@ public final class AppState: ObservableObject {
         }
 
         await refresh()
+    }
+
+    private func makeDependencyStatuses(
+        sunshine: SunshineStatus,
+        blackHole: BlackHoleInstallationStatus
+    ) async -> [DependencyStatus] {
+        [
+            DependencyStatus(
+                id: .sunshine,
+                status: sunshine.state == .notInstalled ? .fail : .pass,
+                detail: sunshine.state == .notInstalled
+                    ? "Instale o Sunshine ou selecione o binário manualmente."
+                    : "Sunshine detectado\(sunshine.binaryPath.map { " em \($0)" } ?? ".").",
+                detectedPath: sunshine.binaryPath,
+                detectedVersion: sunshine.version,
+                officialURL: URL(string: "https://github.com/LizardByte/Sunshine/releases")
+            ),
+            DependencyStatus(
+                id: .blackHole,
+                status: blackHole.checkStatus,
+                detail: blackHole == .installed
+                    ? "BlackHole 2ch detectado para captura de áudio."
+                    : await blackHoleManager.installationGuidance(),
+                officialURL: URL(string: "https://github.com/ExistentialAudio/BlackHole")
+            ),
+            DependencyStatus(
+                id: .moonlight,
+                status: .warning,
+                detail: "Use um cliente Moonlight no dispositivo que receberá o stream.",
+                officialURL: URL(string: "https://moonlight-stream.org")
+            )
+        ]
+    }
+
+    private func determineOperationalState(
+        sunshine: SunshineStatus,
+        blackHole: BlackHoleInstallationStatus,
+        permissions: MacOSPermissionsStatus,
+        health: HealthCheckResult
+    ) -> HostOperationalState {
+        if sunshine.state == .running && sunshine.ownedProcessID == nil {
+            return .externalConflict
+        }
+
+        if sunshine.state == .notInstalled {
+            return .needsDependency
+        }
+
+        if runtimeSettings.audioCaptureMode == .blackHole2ch && blackHole != .installed {
+            return .needsDependency
+        }
+
+        if permissions.aggregateStatus == .fail || permissions.criticalPermissionsSatisfied == false {
+            return .needsPermission
+        }
+
+        if health.status == .failing {
+            return .blocked
+        }
+
+        if sunshine.state == .running {
+            return .running
+        }
+
+        return .ready
+    }
+
+    private func makeOnboardingSteps(
+        dashboard: DashboardSnapshot,
+        health: HealthCheckResult,
+        dependencies: [DependencyStatus]
+    ) -> [OnboardingStep] {
+        let hasConfig = FileManager.default.fileExists(atPath: runtimeSettings.sunshineConfigURL.path)
+            && FileManager.default.fileExists(atPath: runtimeSettings.appsJSONURL.path)
+        let audioStatus = health.checks.first(where: { $0.id == .audio })?.status ?? .unknown
+        let systemStatus = combinedStatus(for: [.macOSVersion, .architecture], in: health)
+        let allMoonlightItemsDone = Set(MoonlightChecklistItemID.allCases).isSubset(of: completedMoonlightChecklistItems)
+
+        return [
+            OnboardingStep(id: .system, title: "Verificar sistema", state: stepState(for: systemStatus), detail: "macOS 14.2+ e Apple Silicon primeiro."),
+            OnboardingStep(id: .sunshine, title: "Detectar Sunshine", state: stepState(for: dependencyStatus(.sunshine, dependencies)), detail: dependencies.first(where: { $0.id == .sunshine })?.detail ?? "Validar Sunshine."),
+            OnboardingStep(id: .blackHole, title: "Detectar BlackHole", state: stepState(for: dependencyStatus(.blackHole, dependencies)), detail: dependencies.first(where: { $0.id == .blackHole })?.detail ?? "Validar BlackHole."),
+            OnboardingStep(id: .audio, title: "Configurar áudio", state: stepState(for: audioStatus), detail: audioStatus == .pass ? "Rota de áudio validada." : "Escolha captura nativa ou BlackHole 2ch."),
+            OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.aggregateStatus), detail: dashboard.permissionsStatus.criticalPermissionsSatisfied ? "Permissões críticas OK." : "Abra Ajustes do Sistema para permissões pendentes."),
+            OnboardingStep(id: .configuration, title: "Gerar configuração", state: hasConfig ? .passed : .pending, detail: runtimeSettings.sunshineConfigURL.path),
+            OnboardingStep(id: .startSunshine, title: "Iniciar Sunshine", state: dashboard.sunshineStatus.state == .running ? .passed : .pending, detail: dashboard.sunshineStatus.state.displayName),
+            OnboardingStep(id: .webUI, title: "Abrir Web UI", state: dashboard.sunshineStatus.webUIReachable ? .passed : .pending, detail: "https://localhost:47990"),
+            OnboardingStep(id: .moonlightPairing, title: "Parear Moonlight", state: allMoonlightItemsDone ? .passed : .active, detail: "Use um IP listado e conclua o checklist no app."),
+            OnboardingStep(id: .diagnostics, title: "Exportar diagnóstico", state: health.status == .failing ? .active : .pending, detail: "Gere um pacote de suporte se o teste falhar.")
+        ]
+    }
+
+    private func combinedStatus(for ids: [HealthCheckID], in health: HealthCheckResult) -> CheckStatus {
+        let statuses = health.checks.filter { ids.contains($0.id) }.map(\.status)
+        if statuses.contains(.fail) { return .fail }
+        if statuses.contains(where: { $0 == .warning || $0 == .unknown }) { return .warning }
+        return statuses.isEmpty ? .unknown : .pass
+    }
+
+    private func dependencyStatus(_ id: DependencyID, _ dependencies: [DependencyStatus]) -> CheckStatus {
+        dependencies.first(where: { $0.id == id })?.status ?? .unknown
+    }
+
+    private func stepState(for status: CheckStatus) -> OnboardingStepState {
+        switch status {
+        case .pass: return .passed
+        case .warning: return .warning
+        case .fail: return .failed
+        case .unknown: return .pending
+        }
     }
 
     private func applyRuntimeDependencies(for settings: MacStreamHostSettings) {

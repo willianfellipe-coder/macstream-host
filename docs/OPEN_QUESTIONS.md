@@ -5,7 +5,7 @@ These questions must be resolved before implementing deeper integrations or publ
 ## Upstream Versioning
 
 - Current local smoke target: Sunshine `2025.924.154138`, commit `86188d47a7463b0f73b35de18a628353adeaa20e`. Confirm whether this should become the first public MVP target or whether a tagged release should be selected instead.
-- Which exact BlackHole tag or commit should the first validated MVP target?
+- Which exact BlackHole tag or commit should be the first validated MVP target?
 - Decision for this MVP: detect external Sunshine and BlackHole installs; do not bundle either upstream binary.
 - Should a later release add a guided download/install flow for BlackHole, or keep driver installation entirely external?
 
@@ -43,9 +43,10 @@ These questions must be resolved before implementing deeper integrations or publ
 ## Packaging And Distribution
 
 - Is there an Apple Developer ID available for signing and notarization?
-- Will the first public beta ship as unsigned source-only, signed app zip, or notarized DMG?
+- Decision for this beta milestone: ship a controlled unsigned DMG for manual testers only. Public distribution remains blocked until Developer ID signing and notarization are available.
 - What release process will publish corresponding source when third-party GPL binaries are bundled?
 - Should the project generate an SBOM during packaging?
+- Should the placeholder-generated app icon be replaced with a committed designer-provided `.icns` before wider beta distribution?
 
 ## Platform Scope
 

@@ -6,6 +6,7 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
     private let logManager: LogManaging
     private let configurationManager: ConfigurationManaging
     private let fileManager: FileManager
+    private let commandRunner: CommandRunning
     private let dateProvider: () -> Date
     private let homePath: String
 
@@ -13,18 +14,20 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
         logManager: LogManaging,
         configurationManager: ConfigurationManaging,
         fileManager: FileManager = .default,
+        commandRunner: CommandRunning = ProcessCommandRunner(),
         dateProvider: @escaping () -> Date = Date.init,
         homePath: String = FileManager.default.homeDirectoryForCurrentUser.path
     ) {
         self.logManager = logManager
         self.configurationManager = configurationManager
         self.fileManager = fileManager
+        self.commandRunner = commandRunner
         self.dateProvider = dateProvider
         self.homePath = homePath
     }
 
-    public func writeBundle(to parentDirectory: URL, diagnostics: DiagnosticsReport) async throws -> SupportBundleResult {
-        let bundleURL = parentDirectory.appendingPathComponent(
+    public func writeBundle(options: SupportBundleOptions, diagnostics: DiagnosticsReport, buildInfo: AppBuildInfo) async throws -> SupportBundleResult {
+        let bundleURL = options.parentDirectoryURL.appendingPathComponent(
             "MacStreamHost-Support-\(Self.timestampFormatter.string(from: dateProvider()))",
             isDirectory: true
         )
@@ -38,7 +41,11 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
         try writeText(summary(for: diagnostics), to: bundleURL.appendingPathComponent("summary.txt"))
         files.append("summary.txt")
 
-        let logSummary = await logManager.exportDiagnosticsSummary()
+        try writeBuildInfo(buildInfo, to: bundleURL.appendingPathComponent("build-info.json"))
+        files.append("build-info.json")
+
+        let logs = await logManager.recentLogs(maxLines: options.maxLogLines)
+        let logSummary = diagnosticsText(for: logs)
         try writeText(redact(logSummary), to: bundleURL.appendingPathComponent("logs.txt"))
         files.append("logs.txt")
 
@@ -48,7 +55,8 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
             files.append("sunshine.conf.txt")
         }
 
-        return SupportBundleResult(directoryPath: bundleURL.path, files: files.sorted())
+        let archivePath = options.includeZip ? try await makeZipArchive(for: bundleURL) : nil
+        return SupportBundleResult(directoryPath: bundleURL.path, archivePath: archivePath, files: files.sorted())
     }
 
     private func writeDiagnosticsJSON(_ diagnostics: DiagnosticsReport, to url: URL) throws {
@@ -61,8 +69,34 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
         try writeText(redact(text), to: url)
     }
 
+    private func writeBuildInfo(_ buildInfo: AppBuildInfo, to url: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(buildInfo)
+        try data.write(to: url, options: .atomic)
+    }
+
     private func writeText(_ text: String, to url: URL) throws {
         try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func diagnosticsText(for logs: [LogEntry]) -> String {
+        var lines = [
+            "MacStream Host diagnostics",
+            "Log directory: \(redact(logManager.logDirectoryURL.path))",
+            ""
+        ]
+
+        if logs.isEmpty {
+            lines.append("No logs found.")
+        } else {
+            for log in logs {
+                lines.append("[\(log.subsystem)] \(log.message)")
+            }
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     private func summary(for diagnostics: DiagnosticsReport) -> String {
@@ -96,6 +130,25 @@ public final class DefaultSupportBundleService: SupportBundleServicing {
         }
 
         return redact(lines.joined(separator: "\n"))
+    }
+
+    private func makeZipArchive(for bundleURL: URL) async throws -> String {
+        let archiveURL = URL(fileURLWithPath: bundleURL.path + ".zip")
+        if fileManager.fileExists(atPath: archiveURL.path) {
+            try fileManager.removeItem(at: archiveURL)
+        }
+
+        let result = await commandRunner.run(
+            executablePath: "/usr/bin/ditto",
+            arguments: ["-c", "-k", "--norsrc", "--noextattr", "--keepParent", bundleURL.path, archiveURL.path],
+            timeout: 30
+        )
+
+        guard result.exitCode == 0 else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSLocalizedDescriptionKey: result.standardError])
+        }
+
+        return archiveURL.path
     }
 
     private func redact(_ value: String) -> String {

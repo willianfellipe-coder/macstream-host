@@ -307,6 +307,8 @@ final class MockLogManager: LogManaging {
     func exportDiagnosticsSummary() async -> String {
         "MacStream Host test diagnostics."
     }
+
+    func rotateLogs(maxBytes: UInt64, backupCount: Int) throws {}
 }
 
 final class StaticMoonlightPairingGuide: MoonlightPairingGuiding {

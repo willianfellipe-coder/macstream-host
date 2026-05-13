@@ -1,6 +1,6 @@
 # Packaging Plan
 
-Packaging currently supports a local unsigned development `.app` bundle and optional unsigned DMG.
+Packaging currently supports a reproducible unsigned beta `.app` bundle and optional drag-and-drop DMG.
 
 ```bash
 ./scripts/package_dmg.sh
@@ -9,17 +9,39 @@ CREATE_DMG=1 ./scripts/package_dmg.sh
 
 The generated artifacts are written under `.build/package/`.
 
-## Development DMG
+## Beta DMG
 
-`CREATE_DMG=1 ./scripts/package_dmg.sh` creates a simple unsigned DMG containing `MacStream Host.app`. This is for local testing only.
+`CREATE_DMG=1 ./scripts/package_dmg.sh` creates an unsigned DMG containing:
+
+- `MacStream Host.app`
+- an `Applications` symlink for drag-and-drop installation
+- `LICENSE`
+- `THIRD_PARTY_NOTICES.md`
+- `UPSTREAMS.md`
+- a SHA-256 checksum beside the DMG
+
+The app bundle includes `Info.plist`, `AppIcon.icns`, build metadata, and bundled license/notices resources. The version is read from `VERSION`; build number can be overridden with `BUILD_NUMBER=`.
+
+This unsigned DMG is for controlled beta testing only. Users will see Gatekeeper warnings because the app is not Developer ID signed or notarized.
 
 ## Signing
 
-Public binary releases should be signed with Apple Developer ID Application. Signing identity and CI secret handling are still TBD.
+Public binary releases should be signed with Apple Developer ID Application:
+
+```bash
+DEVELOPER_ID_APPLICATION="Developer ID Application: Example, Inc. (TEAMID)" \
+NOTARYTOOL_PROFILE="macstream-notary" \
+./scripts/sign_and_notarize.sh
+```
+
+The script fails early when Developer ID or notarytool credentials are missing. The current entitlements file is intentionally minimal and should stay conservative until a specific runtime need is proven.
 
 ## Notarization
 
-Public DMGs should be submitted through `xcrun notarytool` and stapled after approval. This requires an Apple Developer account and release automation.
+Public DMGs should be submitted through `xcrun notarytool` and stapled after approval. This requires an Apple Developer account. Supported credential options:
+
+- `NOTARYTOOL_PROFILE`
+- or `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_SPECIFIC_PASSWORD`
 
 ## Open Source Distribution
 

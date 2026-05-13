@@ -50,6 +50,118 @@ public struct SetupChecklistItem: Identifiable, Codable, Equatable {
     }
 }
 
+public enum HostOperationalState: String, Codable, Equatable, CaseIterable {
+    case ready
+    case blocked
+    case needsPermission
+    case needsDependency
+    case running
+    case externalConflict
+    case unknown
+
+    public var displayName: String {
+        switch self {
+        case .ready: return "Pronto"
+        case .blocked: return "Bloqueado"
+        case .needsPermission: return "Permissão pendente"
+        case .needsDependency: return "Dependência pendente"
+        case .running: return "Rodando"
+        case .externalConflict: return "Conflito externo"
+        case .unknown: return "Desconhecido"
+        }
+    }
+
+    public var checkStatus: CheckStatus {
+        switch self {
+        case .ready, .running: return .pass
+        case .needsPermission, .needsDependency, .unknown: return .warning
+        case .blocked, .externalConflict: return .fail
+        }
+    }
+}
+
+public enum DependencyID: String, Codable, Hashable, CaseIterable {
+    case sunshine
+    case blackHole
+    case moonlight
+
+    public var displayName: String {
+        switch self {
+        case .sunshine: return "Sunshine"
+        case .blackHole: return "BlackHole 2ch"
+        case .moonlight: return "Moonlight"
+        }
+    }
+}
+
+public struct DependencyStatus: Identifiable, Codable, Equatable {
+    public var id: DependencyID
+    public var status: CheckStatus
+    public var detail: String
+    public var detectedPath: String?
+    public var detectedVersion: String?
+    public var officialURL: URL?
+
+    public init(
+        id: DependencyID,
+        status: CheckStatus,
+        detail: String,
+        detectedPath: String? = nil,
+        detectedVersion: String? = nil,
+        officialURL: URL? = nil
+    ) {
+        self.id = id
+        self.status = status
+        self.detail = detail
+        self.detectedPath = detectedPath
+        self.detectedVersion = detectedVersion
+        self.officialURL = officialURL
+    }
+}
+
+public enum OnboardingStepID: String, Codable, Hashable, CaseIterable {
+    case system
+    case sunshine
+    case blackHole
+    case audio
+    case permissions
+    case configuration
+    case startSunshine
+    case webUI
+    case moonlightPairing
+    case diagnostics
+}
+
+public enum OnboardingStepState: String, Codable, Equatable, CaseIterable {
+    case pending
+    case active
+    case passed
+    case warning
+    case failed
+
+    public var checkStatus: CheckStatus {
+        switch self {
+        case .passed: return .pass
+        case .warning, .active, .pending: return .warning
+        case .failed: return .fail
+        }
+    }
+}
+
+public struct OnboardingStep: Identifiable, Codable, Equatable {
+    public var id: OnboardingStepID
+    public var title: String
+    public var state: OnboardingStepState
+    public var detail: String
+
+    public init(id: OnboardingStepID, title: String, state: OnboardingStepState, detail: String) {
+        self.id = id
+        self.title = title
+        self.state = state
+        self.detail = detail
+    }
+}
+
 public enum SunshineServiceState: String, Codable, Equatable, CaseIterable {
     case notInstalled
     case stopped
@@ -729,6 +841,37 @@ public struct ConfigurationFileWriteResult: Codable, Equatable {
     }
 }
 
+public struct PreflightResult: Codable, Equatable {
+    public var generatedAt: Date
+    public var configurationWrites: [ConfigurationFileWriteResult]
+    public var dashboard: DashboardSnapshot
+    public var health: HealthCheckResult
+    public var operationalState: HostOperationalState
+    public var blockers: [String]
+    public var nextStep: String
+    public var startedSunshine: Bool
+
+    public init(
+        generatedAt: Date = Date(),
+        configurationWrites: [ConfigurationFileWriteResult],
+        dashboard: DashboardSnapshot,
+        health: HealthCheckResult,
+        operationalState: HostOperationalState,
+        blockers: [String],
+        nextStep: String,
+        startedSunshine: Bool
+    ) {
+        self.generatedAt = generatedAt
+        self.configurationWrites = configurationWrites
+        self.dashboard = dashboard
+        self.health = health
+        self.operationalState = operationalState
+        self.blockers = blockers
+        self.nextStep = nextStep
+        self.startedSunshine = startedSunshine
+    }
+}
+
 public struct SoftResetResult: Codable, Equatable {
     public var actions: [String]
     public var archivedConfigDirectory: URL?
@@ -771,10 +914,80 @@ public struct DashboardSnapshot: Codable, Equatable {
 
 public struct SupportBundleResult: Codable, Equatable {
     public var directoryPath: String
+    public var archivePath: String?
     public var files: [String]
 
-    public init(directoryPath: String, files: [String]) {
+    public init(directoryPath: String, archivePath: String? = nil, files: [String]) {
         self.directoryPath = directoryPath
+        self.archivePath = archivePath
         self.files = files
+    }
+}
+
+public struct SupportBundleOptions: Codable, Equatable {
+    public var parentDirectoryPath: String
+    public var includeZip: Bool
+    public var maxLogLines: Int
+
+    public init(parentDirectoryPath: String, includeZip: Bool = false, maxLogLines: Int = 200) {
+        self.parentDirectoryPath = parentDirectoryPath
+        self.includeZip = includeZip
+        self.maxLogLines = maxLogLines
+    }
+
+    public var parentDirectoryURL: URL {
+        URL(fileURLWithPath: (parentDirectoryPath as NSString).expandingTildeInPath, isDirectory: true)
+    }
+}
+
+public struct AppBuildInfo: Codable, Equatable {
+    public var version: String
+    public var build: String
+    public var bundleIdentifier: String
+    public var commit: String?
+    public var buildDate: Date?
+
+    public init(
+        version: String = "0.1.0",
+        build: String = "1",
+        bundleIdentifier: String = "org.macstream.host",
+        commit: String? = nil,
+        buildDate: Date? = nil
+    ) {
+        self.version = version
+        self.build = build
+        self.bundleIdentifier = bundleIdentifier
+        self.commit = commit
+        self.buildDate = buildDate
+    }
+
+    public static var current: AppBuildInfo {
+        let bundle = Bundle.main
+        let info = bundle.infoDictionary ?? [:]
+        return AppBuildInfo(
+            version: info["CFBundleShortVersionString"] as? String ?? "0.1.0-beta.1",
+            build: info["CFBundleVersion"] as? String ?? "1",
+            bundleIdentifier: bundle.bundleIdentifier ?? "org.macstream.host",
+            commit: ProcessInfo.processInfo.environment["MACSTREAM_GIT_COMMIT"],
+            buildDate: nil
+        )
+    }
+}
+
+public enum MoonlightChecklistItemID: String, Codable, Hashable, CaseIterable {
+    case webUIOpened
+    case pinEntered
+    case desktopOpened
+    case videoValidated
+    case audioValidated
+
+    public var title: String {
+        switch self {
+        case .webUIOpened: return "Web UI aberta"
+        case .pinEntered: return "PIN inserido"
+        case .desktopOpened: return "Desktop aberto"
+        case .videoValidated: return "Vídeo validado"
+        case .audioValidated: return "Áudio validado"
+        }
     }
 }

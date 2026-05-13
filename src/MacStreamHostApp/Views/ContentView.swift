@@ -6,6 +6,7 @@ import SwiftUI
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case setup
+    case dependencies
     case sunshine
     case audio
     case network
@@ -19,6 +20,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "Dashboard"
         case .setup: return "Setup"
+        case .dependencies: return "Dependencies"
         case .sunshine: return "Sunshine"
         case .audio: return "Audio"
         case .network: return "Network"
@@ -32,6 +34,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .dashboard: return "gauge.with.dots.needle.67percent"
         case .setup: return "checklist"
+        case .dependencies: return "shippingbox"
         case .sunshine: return "sun.max"
         case .audio: return "speaker.wave.2"
         case .network: return "network"
@@ -58,6 +61,8 @@ struct ContentView: View {
                 DashboardView()
             case .setup:
                 SetupView()
+            case .dependencies:
+                DependenciesView()
             case .sunshine:
                 SunshineView()
             case .audio:
@@ -80,7 +85,52 @@ struct DashboardView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Dashboard", subtitle: "Status inicial do host e próximo passo recomendado.") {
+        PageContainer(title: "Dashboard", subtitle: "Operação principal para preparar, iniciar e validar um teste real com Moonlight.") {
+            OperationalStateBanner(state: appState.operationalState, nextStep: appState.dashboard.recommendedNextStep)
+
+            GroupBox("Ações principais") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        Button {
+                            Task {
+                                await appState.runPreflight(
+                                    startAfterValidation: true,
+                                    overwriteConfig: false
+                                )
+                            }
+                        } label: {
+                            Label("Preparar para teste", systemImage: "wand.and.stars")
+                        }
+
+                        Button {
+                            Task { await appState.startSunshine() }
+                        } label: {
+                            Label("Iniciar Sunshine", systemImage: "play.fill")
+                        }
+                        .disabled(appState.dashboard.sunshineStatus.state == .running || appState.dashboard.sunshineStatus.state == .notInstalled)
+
+                        Button {
+                            Task { await appState.openSunshineWebUI() }
+                        } label: {
+                            Label("Abrir Web UI", systemImage: "safari")
+                        }
+
+                        Button {
+                            Task { _ = await appState.exportSupportBundleZip() }
+                        } label: {
+                            Label("Exportar diagnóstico", systemImage: "archivebox")
+                        }
+                    }
+
+                    if let message = appState.lastOperationMessage ?? appState.lastSunshineOperationMessage {
+                        Label(message, systemImage: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
                 StatusPanel(
                     title: "Sunshine",
@@ -111,15 +161,7 @@ struct DashboardView: View {
                 )
             }
 
-            GroupBox("Próximo passo recomendado") {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "arrow.forward.circle")
-                        .foregroundStyle(Color.accentColor)
-                    Text(appState.dashboard.recommendedNextStep)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.vertical, 4)
-            }
+            OnboardingStepList(steps: appState.onboardingSteps)
 
             HStack {
                 Button {
@@ -139,6 +181,50 @@ struct SetupView: View {
 
     var body: some View {
         PageContainer(title: "Setup", subtitle: "Checklist seguro para preparar Sunshine, áudio, rede e pareamento.") {
+            OnboardingStepList(steps: appState.onboardingSteps)
+
+            GroupBox("Preflight") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Button {
+                            Task {
+                                await appState.runPreflight(
+                                    startAfterValidation: false,
+                                    overwriteConfig: false
+                                )
+                            }
+                        } label: {
+                            Label("Validar sem iniciar", systemImage: "checkmark.shield")
+                        }
+
+                        Button {
+                            Task {
+                                await appState.runPreflight(
+                                    startAfterValidation: true,
+                                    overwriteConfig: false
+                                )
+                            }
+                        } label: {
+                            Label("Gerar config e iniciar", systemImage: "play.circle")
+                        }
+
+                        Spacer()
+                    }
+
+                    if let result = appState.lastPreflightResult {
+                        Text("Estado: \(result.operationalState.displayName)")
+                            .font(.headline)
+                        if !result.blockers.isEmpty {
+                            ForEach(result.blockers, id: \.self) { blocker in
+                                Label(blocker, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             VStack(spacing: 10) {
                 ForEach(appState.setupChecklist) { item in
                     HStack(alignment: .top, spacing: 12) {
@@ -188,6 +274,49 @@ struct SetupView: View {
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                     }
                 }
+            }
+        }
+    }
+}
+
+struct DependenciesView: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        PageContainer(title: "Dependencies", subtitle: "Detecção real de Sunshine, BlackHole e orientação para o cliente Moonlight.") {
+            VStack(spacing: 12) {
+                ForEach(appState.dependencyStatuses) { dependency in
+                    DependencyRow(dependency: dependency)
+                }
+            }
+
+            GroupBox("Configurar Sunshine manualmente") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Se o Sunshine não estiver no PATH padrão, informe o caminho do binário em Settings e revalide.")
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text(appState.runtimeSettings.sunshineBinaryPath ?? "Nenhum caminho manual configurado.")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                        Spacer()
+                        Button {
+                            Task { await appState.refreshDependencies() }
+                        } label: {
+                            Label("Revalidar", systemImage: "arrow.clockwise")
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            GroupBox("Política de instalação") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Sunshine e BlackHole não são empacotados nesta beta.", systemImage: "shippingbox")
+                    Label("O app abre fontes oficiais e detecta instalações feitas pelo usuário.", systemImage: "safari")
+                    Label("Nenhuma senha de administrador, driver ou porta de firewall é alterada automaticamente.", systemImage: "lock.shield")
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -345,13 +474,15 @@ struct SunshineView: View {
 
 struct AudioView: View {
     @EnvironmentObject private var appState: AppState
+    @State private var audioDevices: [AudioDevice] = []
+    @State private var routeStatus: CheckStatus = .unknown
 
     var body: some View {
-        PageContainer(title: "Audio", subtitle: "Rotas de captura planejadas: nativa do macOS primeiro, BlackHole 2ch como fallback.") {
+        PageContainer(title: "Audio", subtitle: "Dispositivos CoreAudio reais, rota preferida e configuração Sunshine isolada.") {
             StatusPanel(
                 title: "BlackHole 2ch",
                 value: appState.dashboard.blackHoleStatus.displayName,
-                detail: "Nenhum driver será instalado automaticamente nesta fase.",
+                detail: blackHoleDetail,
                 status: appState.dashboard.blackHoleStatus.checkStatus
             )
 
@@ -377,7 +508,79 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            GroupBox("Dispositivos CoreAudio") {
+                VStack(spacing: 10) {
+                    HStack {
+                        StatusIcon(status: routeStatus)
+                        Text("Rota atual: \(routeStatus.displayName)")
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            Task { await reloadAudioDevices() }
+                        } label: {
+                            Label("Revalidar", systemImage: "arrow.clockwise")
+                        }
+                    }
+
+                    ForEach(audioDevices) { device in
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: device.isOutput ? "speaker.wave.2" : "mic")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(device.name)
+                                    .font(.headline)
+                                Text(deviceDetail(device))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(device.status.rawValue)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .background(.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                    }
+
+                    if audioDevices.isEmpty {
+                        Text("Nenhum dispositivo CoreAudio foi listado no diagnóstico atual.")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
         }
+        .task {
+            await reloadAudioDevices()
+        }
+    }
+
+    private var blackHoleDetail: String {
+        if appState.runtimeSettings.audioCaptureMode == .blackHole2ch {
+            return appState.dashboard.blackHoleStatus == .installed
+                ? "A configuração isolada deve gravar audio_sink = BlackHole 2ch."
+                : "Instale externamente ou escolha captura nativa para continuar sem BlackHole."
+        }
+
+        return "Modo atual não depende de BlackHole, mas ele continua disponível como fallback."
+    }
+
+    private func reloadAudioDevices() async {
+        audioDevices = await appState.audioDeviceManager.listAudioDevices()
+        routeStatus = await appState.audioDeviceManager.validateAudioRoute()
+    }
+
+    private func deviceDetail(_ device: AudioDevice) -> String {
+        let direction = [
+            device.isInput ? "entrada" : nil,
+            device.isOutput ? "saída" : nil
+        ]
+        .compactMap { $0 }
+        .joined(separator: " e ")
+        let sampleRate = device.sampleRate.map { " @ \(Int($0)) Hz" } ?? ""
+        return "\(direction), \(device.channels) canais\(sampleRate)"
     }
 }
 
@@ -389,15 +592,37 @@ struct NetworkView: View {
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(appState.dashboard.networkStatus.localAddresses, id: \.self) { address in
-                        Label(address, systemImage: "network")
+                        HStack {
+                            Label(address, systemImage: "network")
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                            Button {
+                                appState.copyPairingAddress(address)
+                            } label: {
+                                Label("Copiar", systemImage: "doc.on.doc")
+                            }
+                        }
                     }
 
                     if let tailscale = appState.dashboard.networkStatus.tailscaleAddress {
-                        Label(tailscale, systemImage: "lock.shield")
+                        HStack {
+                            Label(tailscale, systemImage: "lock.shield")
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                            Button {
+                                appState.copyPairingAddress(tailscale)
+                            } label: {
+                                Label("Copiar", systemImage: "doc.on.doc")
+                            }
+                        }
                     } else {
                         Text("Tailscale não detectado.")
                             .foregroundStyle(.secondary)
                     }
+
+                    Text("Para teste remoto, prefira VPN mesh como Tailscale. Exposição pública direta de portas Sunshine deve ser avaliada fora deste MVP.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -427,20 +652,35 @@ struct MoonlightView: View {
     var body: some View {
         PageContainer(title: "Moonlight", subtitle: "Guia de pareamento sem depender de API não documentada do Sunshine.") {
             GroupBox("Acesso rápido") {
-                HStack {
-                    Button {
-                        Task { await appState.openSunshineWebUI() }
-                    } label: {
-                        Label("Abrir Web UI do Sunshine", systemImage: "safari")
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Button {
+                            Task { await appState.openSunshineWebUI() }
+                        } label: {
+                            Label("Abrir Web UI do Sunshine", systemImage: "safari")
+                        }
+
+                        Spacer()
                     }
 
-                    if let firstAddress = appState.dashboard.networkStatus.localAddresses.first {
-                        Text(firstAddress)
-                            .font(.system(.body, design: .monospaced))
-                            .textSelection(.enabled)
+                    ForEach(pairingAddresses, id: \.self) { address in
+                        HStack {
+                            Text(address)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button {
+                                appState.copyPairingAddress(address)
+                            } label: {
+                                Label("Copiar", systemImage: "doc.on.doc")
+                            }
+                        }
                     }
 
-                    Spacer()
+                    if pairingAddresses.isEmpty {
+                        Text("Nenhum IP local foi detectado; execute o diagnóstico de rede antes do pareamento.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -466,7 +706,37 @@ struct MoonlightView: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                 }
             }
+
+            GroupBox("Checklist pós-pareamento") {
+                VStack(spacing: 10) {
+                    ForEach(MoonlightChecklistItemID.allCases, id: \.self) { item in
+                        Toggle(isOn: checklistBinding(for: item)) {
+                            Text(item.title)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+    }
+
+    private var pairingAddresses: [String] {
+        var addresses = appState.dashboard.networkStatus.localAddresses
+        if let tailscale = appState.dashboard.networkStatus.tailscaleAddress {
+            addresses.append(tailscale)
+        }
+        return addresses
+    }
+
+    private func checklistBinding(for item: MoonlightChecklistItemID) -> Binding<Bool> {
+        Binding(
+            get: { appState.completedMoonlightChecklistItems.contains(item) },
+            set: { isComplete in
+                if isComplete {
+                    appState.markMoonlightChecklistItemComplete(item)
+                }
+            }
+        )
     }
 }
 
@@ -481,6 +751,24 @@ struct DiagnosticsView: View {
                 detail: appState.healthCheckResult.recommendedNextStep,
                 status: status(for: appState.healthCheckResult.status)
             )
+
+            GroupBox("Suporte") {
+                HStack {
+                    Button {
+                        Task { _ = await appState.exportSupportBundleZip() }
+                    } label: {
+                        Label("Exportar ZIP de suporte", systemImage: "archivebox")
+                    }
+
+                    Button {
+                        Task { await appState.refresh() }
+                    } label: {
+                        Label("Reexecutar diagnóstico", systemImage: "arrow.clockwise")
+                    }
+
+                    Spacer()
+                }
+            }
 
             VStack(spacing: 10) {
                 ForEach(appState.healthCheckResult.checks) { check in
@@ -630,11 +918,9 @@ struct SettingsView: View {
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                     Button {
-                        let outputURL = appState.logManager.logDirectoryURL
-                            .appendingPathComponent("SupportBundles", isDirectory: true)
-                        Task { _ = await appState.writeSupportBundle(to: outputURL) }
+                        Task { _ = await appState.exportSupportBundleZip() }
                     } label: {
-                        Label("Exportar pacote de suporte", systemImage: "archivebox")
+                        Label("Exportar ZIP de suporte", systemImage: "archivebox")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -752,6 +1038,106 @@ struct SettingsView: View {
                 return nil
             }
         }
+    }
+}
+
+struct OperationalStateBanner: View {
+    let state: HostOperationalState
+    let nextStep: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            StatusIcon(status: state.checkStatus)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.displayName)
+                    .font(.title3.weight(.semibold))
+                Text(nextStep)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+    }
+}
+
+struct OnboardingStepList: View {
+    let steps: [OnboardingStep]
+
+    var body: some View {
+        GroupBox("Onboarding de primeira execução") {
+            VStack(spacing: 10) {
+                ForEach(steps) { step in
+                    HStack(alignment: .top, spacing: 12) {
+                        StatusIcon(status: step.state.checkStatus)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(step.title)
+                                .font(.headline)
+                            Text(step.detail)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Text(label(for: step.state))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .background(.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                }
+            }
+        }
+    }
+
+    private func label(for state: OnboardingStepState) -> String {
+        switch state {
+        case .pending: return "Pendente"
+        case .active: return "Ativo"
+        case .passed: return "OK"
+        case .warning: return "Atenção"
+        case .failed: return "Falha"
+        }
+    }
+}
+
+struct DependencyRow: View {
+    let dependency: DependencyStatus
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            StatusIcon(status: dependency.status)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(dependency.id.displayName)
+                    .font(.headline)
+                Text(dependency.detail)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let path = dependency.detectedPath {
+                    Text(path)
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                if let version = dependency.detectedVersion {
+                    Text("Versão: \(version)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if let url = dependency.officialURL {
+                Link(destination: url) {
+                    Label("Site oficial", systemImage: "safari")
+                }
+            }
+        }
+        .padding(12)
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
     }
 }
 

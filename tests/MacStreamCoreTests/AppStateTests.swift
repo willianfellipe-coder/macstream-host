@@ -49,6 +49,62 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(report.settings, appState.runtimeSettings)
         XCTAssertFalse(report.audioDevices.isEmpty)
         XCTAssertEqual(report.launchAgentStatus, .notInstalled)
+        XCTAssertFalse(report.dependencies.isEmpty)
+        XCTAssertFalse(report.buildInfo.bundleIdentifier.isEmpty)
+    }
+
+    @MainActor
+    func testRunPreflightPublishesStructuredResult() async {
+        let permissions = MockPermissionManager(permissionsStatus: MacOSPermissionsStatus(checks: [
+            PermissionCheck(id: .screenRecording, status: .granted, detail: "OK"),
+            PermissionCheck(id: .microphone, status: .granted, detail: "OK"),
+            PermissionCheck(id: .localNetwork, status: .granted, detail: "OK"),
+            PermissionCheck(id: .accessibility, status: .granted, detail: "OK")
+        ]))
+        let appState = makeTestAppState(
+            blackHole: MockBlackHoleManager(status: .installed),
+            permissions: permissions
+        )
+
+        await appState.runPreflight(startAfterValidation: true, overwriteConfig: true)
+
+        let result = appState.lastPreflightResult
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.configurationWrites.count, 2)
+        XCTAssertEqual(result?.dashboard.sunshineStatus.state, .running)
+        XCTAssertEqual(result?.operationalState, .running)
+        XCTAssertEqual(result?.startedSunshine, true)
+        XCTAssertEqual(appState.lastOperationMessage, "Preflight concluído.")
+    }
+
+    @MainActor
+    func testOnboardingShowsDependencyBlockers() async {
+        let appState = makeTestAppState(
+            sunshine: MockSunshineManager(currentStatus: SunshineStatus(state: .notInstalled)),
+            blackHole: MockBlackHoleManager(status: .missing)
+        )
+
+        await appState.refresh()
+
+        XCTAssertEqual(appState.operationalState, .needsDependency)
+        XCTAssertEqual(appState.dependencyStatuses.first(where: { $0.id == .sunshine })?.status, .fail)
+        XCTAssertEqual(appState.onboardingSteps.first(where: { $0.id == .sunshine })?.state, .failed)
+        XCTAssertEqual(Set(appState.onboardingSteps.map(\.id)), Set(OnboardingStepID.allCases))
+    }
+
+    @MainActor
+    func testMoonlightChecklistCanCompletePairingStep() async {
+        let appState = makeTestAppState()
+        await appState.refresh()
+
+        for item in MoonlightChecklistItemID.allCases {
+            appState.markMoonlightChecklistItemComplete(item)
+        }
+
+        XCTAssertEqual(
+            appState.onboardingSteps.first(where: { $0.id == .moonlightPairing })?.state,
+            .passed
+        )
     }
 
     @MainActor

@@ -76,6 +76,7 @@ public protocol LogManaging {
 
     func recentLogs(maxLines: Int) async -> [LogEntry]
     func exportDiagnosticsSummary() async -> String
+    func rotateLogs(maxBytes: UInt64, backupCount: Int) throws
 }
 
 public protocol MoonlightPairingGuiding {
@@ -91,5 +92,5 @@ public protocol SoftResetServicing {
 }
 
 public protocol SupportBundleServicing {
-    func writeBundle(to parentDirectory: URL, diagnostics: DiagnosticsReport) async throws -> SupportBundleResult
+    func writeBundle(options: SupportBundleOptions, diagnostics: DiagnosticsReport, buildInfo: AppBuildInfo) async throws -> SupportBundleResult
 }

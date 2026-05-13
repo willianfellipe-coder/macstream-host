@@ -35,13 +35,14 @@ Implemented now:
 - Persistent runtime settings for Sunshine binary path, config directory, log directory, and audio mode.
 - Safe Sunshine discovery/status, Web UI opening, and start/stop/restart using MacStream Host ownership metadata only.
 - SwiftUI Sunshine screen wired to local diagnostics, isolated config generation, Web UI opening, and owned process control.
+- SwiftUI operational dashboard with preflight CTA, first-run onboarding, dependency detection, Moonlight checklist, copyable pairing addresses, and support ZIP export.
 - Safe CoreAudio device enumeration and BlackHole 2ch detection for diagnostics.
 - Safe local network diagnostics for IP addresses, Sunshine ports, and Tailscale address detection.
 - Safe permission diagnostics for Screen Recording, Microphone, Accessibility, and guided Local Network validation.
 - User LaunchAgent render/install/load/unload/remove without `sudo`, with plist and path validation.
-- `doctor --json`, real log reading, and soft reset of MacStream Host owned state.
-- Minimal unsigned development `.app` and optional DMG packaging script.
-- Initial SwiftUI sidebar with Dashboard, Setup, Sunshine, Audio, Network, Moonlight, Diagnostics, and Settings.
+- `doctor --json`, `doctor --strict`, real log reading, zipped support bundle export, and soft reset of MacStream Host owned state.
+- Unsigned beta `.app` and optional drag-and-drop DMG packaging script with notices, build metadata, app icon, and SHA-256 checksum.
+- SwiftUI sidebar with Dashboard, Setup, Dependencies, Sunshine, Audio, Network, Moonlight, Diagnostics, and Settings.
 - Domain models for Sunshine, BlackHole, permissions, audio, network, health checks, and streaming quality profiles.
 - Unit tests for status rules, health checks, configuration validation, app state, settings, logs, LaunchAgent, reset, and test doubles.
 - Safe diagnostic scripts that do not install, delete, request `sudo`, or modify system settings.
@@ -130,6 +131,7 @@ Run the CLI doctor:
 ```bash
 swift run macstreamctl doctor
 swift run macstreamctl doctor --json
+swift run macstreamctl doctor --strict
 ```
 
 The CLI doctor uses safe Sunshine discovery. It detects a `sunshine` binary, running process, Web UI reachability, audio devices, permission status where public APIs allow it, network ports, and LaunchAgent draft status.
@@ -181,10 +183,11 @@ Print recent logs or perform a soft reset of MacStream Host owned state:
 ```bash
 swift run macstreamctl logs
 swift run macstreamctl support-bundle
+swift run macstreamctl support-bundle --zip
 swift run macstreamctl reset --confirm
 ```
 
-`support-bundle` exports sanitized diagnostics, logs, and the isolated Sunshine config to `~/Library/Logs/MacStreamHost/SupportBundles/` by default.
+`support-bundle` exports sanitized diagnostics, logs, build metadata, and the isolated Sunshine config to `~/Library/Logs/MacStreamHost/SupportBundles/` by default.
 
 Run the SwiftUI app from SwiftPM:
 
@@ -199,18 +202,24 @@ Run safe local diagnostics:
 ./scripts/generate-diagnostics.sh
 ```
 
-Create a local unsigned app bundle:
+Create a local unsigned beta app bundle or DMG:
 
 ```bash
 ./scripts/package_dmg.sh
 CREATE_DMG=1 ./scripts/package_dmg.sh
 ```
 
+The DMG is unsigned until a Developer ID certificate is available. For a future signed release, configure the variables documented in `packaging/README.md` and run:
+
+```bash
+./scripts/sign_and_notarize.sh
+```
+
 ## Roadmap
 
 1. Validate Sunshine launch arguments and Web UI behavior against a pinned upstream version.
-2. Run the first end-to-end manual acceptance test with Moonlight on a real client.
-3. Improve support bundle export into a user-selected zip from the SwiftUI app.
+2. Run the first end-to-end manual acceptance test with Moonlight on a real client from the unsigned DMG.
+3. Capture beta feedback for permissions, audio route selection, LaunchAgent persistence, and Gatekeeper unsigned flow.
 4. Add signed and notarized release automation once Developer ID is available.
 5. Decide whether Intel Mac support is out of scope or only unvalidated.
 
