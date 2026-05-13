@@ -86,6 +86,17 @@ The final app will need to guide the user through macOS privacy and networking p
 
 MacStream Host does not bypass macOS permissions and does not use private Apple APIs.
 
+### Screen Recording for the embedded video engine
+
+The video engine (`Sunshine.app` embedded under `Contents/Resources/sunshine/`) is signed by its upstream maintainer (LizardByte) with its own bundle identifier (`dev.lizardbyte.app.Sunshine`). macOS TCC treats it as a separate process for privacy grants — so on first run you must grant Screen Recording **specifically to "Sunshine"** in *System Settings → Privacy & Security → Screen Recording*, even if you already granted it to MacStream Host.
+
+Until the app is distributed with an Apple Developer ID signature, macOS revokes that grant every time the bundle is replaced (every `./scripts/package_dmg.sh` rebuild + reinstall). The Dashboard detects this state automatically and surfaces a red banner with two actions:
+
+- **Resetar permissão do motor de vídeo** — runs `tccutil reset ScreenCapture dev.lizardbyte.app.Sunshine` to clear any zombie entry.
+- **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane so you can flip the toggle.
+
+After the Developer ID signing pass (release pipeline), grants persist across rebuilds and this manual recovery becomes unnecessary.
+
 ## Sunshine On macOS
 
 Sunshine support on macOS is still more limited than on some other platforms. Known limitations from the planning documents include experimental macOS support, possible permission friction, audio-route variability, and lack of current macOS host gamepad support in Sunshine. MacStream Host should communicate those limits honestly instead of promising unvalidated compatibility.

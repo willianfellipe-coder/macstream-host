@@ -215,13 +215,27 @@ JSON
 
 echo "Created app bundle: $APP_DIR"
 
+# Ad-hoc sign the bundle when a Developer ID is not provided. macOS TCC keys
+# Screen Recording grants on the code signature; without any signature, every
+# rebuild invalidates the embedded Sunshine grant and the user has to re-allow
+# the toggle from scratch. Ad-hoc signing gives the bundle a stable cdhash so
+# TCC has something coherent to track, and is replaced by the proper Developer
+# ID signature in sign_and_notarize.sh when releasing.
+if [[ -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
+  echo "Applying ad-hoc code signature (no DEVELOPER_ID_APPLICATION set)..."
+  /usr/bin/codesign --force --deep --sign - \
+    --options runtime \
+    --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
+    "$APP_DIR" >/dev/null
+fi
+
 if [[ "${CREATE_DMG:-0}" == "1" ]]; then
   DMG_PATH="$PACKAGE_DIR/$APP_NAME.dmg"
   CHECKSUM_PATH="$DMG_PATH.sha256"
   rm -f "$DMG_PATH"
   rm -rf "$DMG_STAGING_DIR"
   mkdir -p "$DMG_STAGING_DIR"
-  cp -R "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
+  /usr/bin/ditto "$APP_DIR" "$DMG_STAGING_DIR/$APP_NAME.app"
   ln -s /Applications "$DMG_STAGING_DIR/Applications"
   cp "$ROOT_DIR/LICENSE" "$DMG_STAGING_DIR/LICENSE"
   cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$DMG_STAGING_DIR/THIRD_PARTY_NOTICES.md"
