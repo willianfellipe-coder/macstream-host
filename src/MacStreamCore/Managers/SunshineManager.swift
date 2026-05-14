@@ -267,6 +267,7 @@ public final class ProcessSunshineLauncher: SunshineProcessLaunching {
         ensureFileExists(stdoutURL)
         ensureFileExists(stderrURL)
 
+        #if os(macOS)
         let stdout = try FileHandle(forWritingTo: stdoutURL)
         let stderr = try FileHandle(forWritingTo: stderrURL)
         _ = try? stdout.seekToEnd()
@@ -276,20 +277,26 @@ public final class ProcessSunshineLauncher: SunshineProcessLaunching {
             try? stderr.close()
         }
 
-        let process = Process()
-        process.executableURL = binaryURL
-        process.arguments = [configURL.path]
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
+        // Spawn Sunshine with `responsibility_spawnattrs_setdisclaim` so TCC checks
+        // (Screen Recording, Microphone) are attributed to MacStream Host instead of
+        // to the embedded Sunshine bundle. One permission grant for the parent app
+        // is enough — Sunshine no longer needs its own entry in System Settings.
+        let pid = try spawnDisclaimedChild(DisclaimedSpawnConfig(
+            executablePath: binaryURL.path,
+            arguments: [configURL.path],
+            stdoutFD: stdout.fileDescriptor,
+            stderrFD: stderr.fileDescriptor
+        ))
 
         return SunshineOwnedProcess(
-            processID: process.processIdentifier,
+            processID: pid,
             binaryPath: binaryURL.path,
             configPath: configURL.path,
             startedAt: dateProvider()
         )
+        #else
+        throw SunshineManagerError.launchFailed("Sunshine launcher requires macOS")
+        #endif
     }
 
     private func ensureFileExists(_ url: URL) {
@@ -440,7 +447,14 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
 
     private func bundleResourcePaths() -> [String] {
         guard let bundleResourceURL else { return [] }
+        // Bundle.main.resourceURL is .../Contents/Resources/. The engine binary
+        // now lives at ../MacOS/MacStreamEngine — sibling of the host app
+        // binary — so it inherits the parent bundle's TCC identity.
+        let contentsURL = bundleResourceURL.deletingLastPathComponent()
         return [
+            contentsURL.appendingPathComponent("MacOS/MacStreamEngine").path,
+            // Legacy paths kept temporarily so an in-place upgrade from the old
+            // layout still resolves a working binary on first launch.
             bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine").path,
             bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/sunshine").path,
             bundleResourceURL.appendingPathComponent("sunshine/bin/sunshine").path
@@ -460,6 +474,7 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
 
     private static func defaultCandidatePaths() -> [String] {
         [
+            "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/sunshine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/bin/sunshine",

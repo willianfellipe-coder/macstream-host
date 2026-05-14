@@ -13,11 +13,14 @@ PACKAGE_DIR="$ROOT_DIR/.build/package"
 APP_DIR="$PACKAGE_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_STAGING_DIR="$PACKAGE_DIR/dmg-staging"
 SUNSHINE_STAGE_DIR="$ROOT_DIR/Resources/sunshine"
-SUNSHINE_STAGE_APP="$SUNSHINE_STAGE_DIR/Sunshine.app"
-SUNSHINE_BUNDLE_DEST="$RESOURCES_DIR/sunshine"
+SUNSHINE_STAGE_BIN="$SUNSHINE_STAGE_DIR/bin/MacStreamEngine"
+SUNSHINE_STAGE_FRAMEWORKS="$SUNSHINE_STAGE_DIR/Frameworks"
+SUNSHINE_STAGE_ASSETS="$SUNSHINE_STAGE_DIR/assets"
+ENGINE_BIN_NAME="MacStreamEngine"
 SWIFTPM_CACHE_DIR="$PACKAGE_DIR/swiftpm-cache"
 SWIFTPM_CONFIG_DIR="$PACKAGE_DIR/swiftpm-config"
 SWIFTPM_SECURITY_DIR="$PACKAGE_DIR/swiftpm-security"
@@ -26,9 +29,9 @@ CLANG_MODULE_CACHE_DIR="$PACKAGE_DIR/clang-module-cache"
 
 echo "Building $PRODUCT_NAME $VERSION ($CONFIGURATION)"
 
-if [[ ! -x "$SUNSHINE_STAGE_APP/Contents/MacOS/sunshine" ]]; then
-  echo "Sunshine.app is not staged at $SUNSHINE_STAGE_APP" >&2
-  echo "Run ./scripts/fetch_sunshine.sh first (downloads pinned upstream DMG, verifies SHA-256)." >&2
+if [[ ! -x "$SUNSHINE_STAGE_BIN" ]]; then
+  echo "Engine binary is not staged at $SUNSHINE_STAGE_BIN" >&2
+  echo "Run ./scripts/fetch_sunshine.sh first (downloads pinned upstream DMG, verifies SHA-256, extracts flat layout)." >&2
   exit 5
 fi
 
@@ -37,8 +40,10 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "App bundle: $APP_DIR"
   echo "DMG staging: $DMG_STAGING_DIR"
   echo "Bundle identifier: org.macstream.host"
-  echo "Sunshine staging: $SUNSHINE_STAGE_APP"
-  echo "Sunshine bundle destination: $SUNSHINE_BUNDLE_DEST/Sunshine.app"
+  echo "Engine binary staging: $SUNSHINE_STAGE_BIN"
+  echo "Engine binary destination: $MACOS_DIR/$ENGINE_BIN_NAME"
+  echo "Engine frameworks destination: $FRAMEWORKS_DIR/"
+  echo "Engine assets destination: $RESOURCES_DIR/assets/"
   echo "Create DMG: ${CREATE_DMG:-0}"
   exit 0
 fi
@@ -67,7 +72,7 @@ if [[ ! -x "$BINARY_PATH" ]]; then
 fi
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 cp "$BINARY_PATH" "$MACOS_DIR/$APP_NAME"
 
 if [[ -x "$BINARY_DIR/macstreamctl" ]]; then
@@ -82,14 +87,30 @@ cp "$ROOT_DIR/LICENSE" "$RESOURCES_DIR/LICENSE"
 cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$RESOURCES_DIR/THIRD_PARTY_NOTICES.md"
 cp "$ROOT_DIR/UPSTREAMS.md" "$RESOURCES_DIR/UPSTREAMS.md"
 
-rm -rf "$SUNSHINE_BUNDLE_DEST"
-mkdir -p "$SUNSHINE_BUNDLE_DEST"
-/usr/bin/ditto "$SUNSHINE_STAGE_APP" "$SUNSHINE_BUNDLE_DEST/Sunshine.app"
-for sunshine_note in "$SUNSHINE_STAGE_DIR/LICENSE" "$SUNSHINE_STAGE_DIR/README.md"; do
-  if [[ -f "$sunshine_note" ]]; then
-    cp "$sunshine_note" "$SUNSHINE_BUNDLE_DEST/$(basename "$sunshine_note")"
-  fi
-done
+# Engine binary becomes a sibling of MacStream Host inside Contents/MacOS so
+# the OS attributes its TCC calls to the parent bundle identity. The binary
+# uses @executable_path/../Frameworks/ and ../Resources/assets/ which resolve
+# to Contents/Frameworks/ and Contents/Resources/assets/ from this location.
+cp "$SUNSHINE_STAGE_BIN" "$MACOS_DIR/$ENGINE_BIN_NAME"
+chmod 755 "$MACOS_DIR/$ENGINE_BIN_NAME"
+
+if [[ -d "$SUNSHINE_STAGE_FRAMEWORKS" ]]; then
+  shopt -s nullglob
+  for src in "$SUNSHINE_STAGE_FRAMEWORKS"/*.dylib "$SUNSHINE_STAGE_FRAMEWORKS"/*.framework; do
+    [[ -e "$src" ]] || continue
+    /usr/bin/ditto "$src" "$FRAMEWORKS_DIR/$(/usr/bin/basename "$src")"
+  done
+  shopt -u nullglob
+fi
+
+if [[ -d "$SUNSHINE_STAGE_ASSETS" ]]; then
+  rm -rf "$RESOURCES_DIR/assets"
+  /usr/bin/ditto "$SUNSHINE_STAGE_ASSETS" "$RESOURCES_DIR/assets"
+fi
+
+if [[ -f "$SUNSHINE_STAGE_DIR/LICENSE" ]]; then
+  cp "$SUNSHINE_STAGE_DIR/LICENSE" "$RESOURCES_DIR/LICENSE-engine"
+fi
 
 ICON_PATH="$RESOURCES_DIR/AppIcon.icns"
 if [[ -f "$ROOT_DIR/packaging/AppIcon.icns" ]]; then
@@ -195,10 +216,14 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>GPL-3.0-or-later. Sunshine, BlackHole and Moonlight are independent upstream projects.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>MacStream precisa capturar a tela para transmitir ao Moonlight.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>MacStream Host validates audio capture routes for Sunshine streaming.</string>
+  <string>MacStream precisa do microfone para transmitir áudio ao Moonlight.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>MacStream precisa capturar o áudio do sistema para transmitir ao Moonlight.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>MacStream Host validates local Moonlight pairing and Sunshine connectivity.</string>
+  <string>MacStream descobre dispositivos Moonlight na rede local.</string>
 </dict>
 </plist>
 PLIST
@@ -215,42 +240,62 @@ JSON
 
 echo "Created app bundle: $APP_DIR"
 
-# Ad-hoc sign the bundle when a Developer ID is not provided. macOS TCC keys
-# Screen Recording grants on the code signature; without any signature, every
-# rebuild invalidates the embedded Sunshine grant and the user has to re-allow
-# the toggle from scratch. Ad-hoc signing gives the bundle a stable cdhash so
-# TCC has something coherent to track, and is replaced by the proper Developer
-# ID signature in sign_and_notarize.sh when releasing.
+# Sign the bundle. Order matters:
+#   1. Embedded dylibs in Contents/Frameworks first (codesign --deep does NOT
+#      descend into Frameworks reliably on every macOS version)
+#   2. The helper engine binary in Contents/MacOS
+#   3. Sibling helper executables (macstreamctl, macstream-agent)
+#   4. The parent .app last — its signature now seals everything underneath
 #
-# Crucially, `codesign --deep` does NOT descend into Contents/Resources, so we
-# must explicitly sign the embedded Sunshine.app and every nested framework
-# *before* signing the parent wrapper. The Tahoe TCC subsystem refuses to add
-# Sunshine to the Screen Recording list when the embedded app keeps its
-# upstream LizardByte Developer ID signature while the parent is ad-hoc — the
-# identities mismatch and Tahoe treats the pair as suspicious. fetch_sunshine.sh
-# already stripped the upstream signature; here we re-seal everything under a
-# single ad-hoc identity that matches the wrapper.
-if [[ -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
-  EMBEDDED_SUNSHINE_APP="$SUNSHINE_BUNDLE_DEST/Sunshine.app"
-  if [[ -d "$EMBEDDED_SUNSHINE_APP" ]]; then
-    echo "Signing embedded Sunshine.app frameworks first..."
-    /usr/bin/find "$EMBEDDED_SUNSHINE_APP/Contents/Frameworks" \
-      \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
-      | xargs -0 -I {} /usr/bin/codesign --force --sign - --timestamp=none {} 2>/dev/null || true
+# Identity priority:
+#   - DEVELOPER_ID_APPLICATION env var (Apple Developer ID) → production
+#   - CODESIGN_IDENTITY env var → any valid local identity
+#   - Otherwise: ad-hoc with a warning (Screen Recording grants survive ad-hoc
+#     only when cdhash is stable, which it is for unchanged code; the user
+#     gets a fresh prompt only when the binary actually changes).
+if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
+  SIGN_IDENTITY="$DEVELOPER_ID_APPLICATION"
+elif [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  SIGN_IDENTITY="$CODESIGN_IDENTITY"
+else
+  SIGN_IDENTITY="-"
+  echo "WARNING: signing ad-hoc ('-'). Screen Recording grants may be invalidated on each rebuild." >&2
+  echo "         Set CODESIGN_IDENTITY (local) or DEVELOPER_ID_APPLICATION (production) for stable cdhash." >&2
+fi
 
-    echo "Signing embedded Sunshine.app wrapper ad-hoc..."
-    /usr/bin/codesign --force --deep --sign - \
-      --options runtime \
-      --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
-      "$EMBEDDED_SUNSHINE_APP" >/dev/null
-  fi
+echo "Signing with identity: $SIGN_IDENTITY"
 
-  echo "Applying ad-hoc code signature to MacStream Host.app..."
-  /usr/bin/codesign --force --deep --sign - \
+if [[ -d "$FRAMEWORKS_DIR" ]]; then
+  echo "Signing Contents/Frameworks/..."
+  /usr/bin/find "$FRAMEWORKS_DIR" -maxdepth 1 \
+    \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
+    | xargs -0 -I {} /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp=none {} || true
+fi
+
+if [[ -x "$MACOS_DIR/$ENGINE_BIN_NAME" ]]; then
+  # Use the parent bundle's identifier so TCC sees the helper as part of
+  # MacStream Host instead of as a standalone Mach-O with its own ad-hoc
+  # identity. Without --identifier, codesign falls back to `<basename>-<hash>`
+  # which makes the helper a separate TCC subject.
+  echo "Signing Contents/MacOS/$ENGINE_BIN_NAME (engine helper) as org.macstream.host..."
+  /usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
+    --identifier "org.macstream.host" \
     --options runtime \
     --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
-    "$APP_DIR" >/dev/null
+    "$MACOS_DIR/$ENGINE_BIN_NAME" >/dev/null
 fi
+
+for helper in macstreamctl macstream-agent; do
+  if [[ -x "$MACOS_DIR/$helper" ]]; then
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS_DIR/$helper" >/dev/null
+  fi
+done
+
+echo "Signing parent MacStream Host.app (without --deep so helper identifier is preserved)..."
+/usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
+  --options runtime \
+  --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
+  "$APP_DIR" >/dev/null
 
 if [[ "${CREATE_DMG:-0}" == "1" ]]; then
   DMG_PATH="$PACKAGE_DIR/$APP_NAME.dmg"

@@ -69,7 +69,35 @@ final class SunshineManagerTests: XCTestCase {
         XCTAssertEqual(resolver.resolveBinary()?.path, sunshineURL.path)
     }
 
-    func testResolverPrefersBundledSunshineOverPathAndCandidates() throws {
+    func testResolverPrefersFlatHelperEngineOverEverything() throws {
+        // Simulate the new packaged layout: Contents/Resources is the bundle
+        // resource URL, and the engine binary lives at ../MacOS/MacStreamEngine.
+        let appBundle = try makeTemporaryDirectory()
+        let contents = appBundle.appendingPathComponent("Contents")
+        let resources = contents.appendingPathComponent("Resources")
+        let macOS = contents.appendingPathComponent("MacOS")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        let helperEngine = macOS.appendingPathComponent("MacStreamEngine")
+        try writeExecutableStub(at: helperEngine)
+
+        // Also place a legacy embedded Sunshine.app to prove the flat helper wins.
+        let legacy = resources.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try writeExecutableStub(at: legacy)
+
+        let resolver = DefaultSunshineBinaryResolver(
+            candidatePaths: [],
+            environment: [:],
+            bundleResourceURL: resources
+        )
+
+        XCTAssertEqual(resolver.resolveBinary()?.path, helperEngine.path)
+    }
+
+    func testResolverFallsBackToLegacyInnerBundleWhenFlatHelperMissing() throws {
+        // Simulate an in-place upgrade where the new flat helper isn't there yet
+        // but the old Sunshine.app still is — we should still find it.
         let bundleResourceURL = try makeTemporaryDirectory()
         let bundledSunshine = bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
         try FileManager.default.createDirectory(at: bundledSunshine.deletingLastPathComponent(), withIntermediateDirectories: true)
