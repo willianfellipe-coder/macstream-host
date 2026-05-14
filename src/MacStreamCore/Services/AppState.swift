@@ -548,14 +548,31 @@ public final class AppState: ObservableObject {
     /// entry, truncates the engine logs so stale crash dumps stop tripping the
     /// detection banner, then opens the Screen Recording pane in System Settings.
     public func resetSunshineScreenRecordingGrant() async {
-        let result = await commandRunner.run(
-            executablePath: "/usr/bin/tccutil",
-            arguments: ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"],
-            timeout: 5
-        )
+        // The embedded video engine ships under our identity namespace
+        // (see scripts/fetch_sunshine.sh). Reset that bundle id as well as
+        // the upstream identifier in case the user previously installed a
+        // build that still carried LizardByte's original Developer ID.
+        let bundleIDs = [
+            "org.macstream.host.engine.sunshine",
+            "dev.lizardbyte.app.Sunshine"
+        ]
+        var combinedExit: Int32 = 0
+        var combinedError = ""
+        for bundleID in bundleIDs {
+            let result = await commandRunner.run(
+                executablePath: "/usr/bin/tccutil",
+                arguments: ["reset", "ScreenCapture", bundleID],
+                timeout: 5
+            )
+            if result.exitCode != 0 {
+                combinedExit = result.exitCode
+                combinedError = result.standardError
+            }
+        }
+        let result = CommandResult(exitCode: combinedExit, standardError: combinedError)
         truncateSunshineLogs()
         if result.exitCode == 0 {
-            lastOperationMessage = "Permissão do motor de vídeo resetada. Abra Ajustes do Sistema e ative o toggle para 'Sunshine'."
+            lastOperationMessage = "Permissão do motor de vídeo resetada. Abra Ajustes do Sistema e ative o toggle para 'MacStream Video Engine' (se aparecer 'Sunshine' por causa de uma instalação anterior, ative esse também)."
         } else {
             let detail = result.standardError.isEmpty
                 ? "tccutil retornou código \(result.exitCode)."

@@ -88,12 +88,14 @@ MacStream Host does not bypass macOS permissions and does not use private Apple 
 
 ### Screen Recording for the embedded video engine
 
-The video engine (`Sunshine.app` embedded under `Contents/Resources/sunshine/`) is signed by its upstream maintainer (LizardByte) with its own bundle identifier (`dev.lizardbyte.app.Sunshine`). macOS TCC treats it as a separate process for privacy grants — so on first run you must grant Screen Recording **specifically to "Sunshine"** in *System Settings → Privacy & Security → Screen Recording*, even if you already granted it to MacStream Host.
+The video engine is the upstream `Sunshine.app` re-bundled under MacStream Host's identity namespace (`org.macstream.host.engine.sunshine`). `scripts/fetch_sunshine.sh` rewrites the bundle id and strips the upstream Developer ID signature so `scripts/package_dmg.sh` can re-seal the embedded app with the same ad-hoc identity as the wrapper. This is the only configuration macOS Tahoe (26+) reliably honors for TCC grants on apps inside other apps — keeping LizardByte's original Developer ID alongside our ad-hoc wrapper made Tahoe silently refuse to add the embedded engine to *Gravação do Áudio do Sistema e da Tela*.
 
-Until the app is distributed with an Apple Developer ID signature, macOS revokes that grant every time the bundle is replaced (every `./scripts/package_dmg.sh` rebuild + reinstall). The Dashboard detects this state automatically and surfaces a red banner with two actions:
+On first run, grant Screen Recording **specifically to "MacStream Video Engine"** in *System Settings → Privacy & Security → Gravação do Áudio do Sistema e da Tela* (in older macOS this pane is called "Screen Recording"). The entry has to be added manually with the `+` button pointing at `/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app`. Once the toggle is on, MacStream Host can drive the engine without any further prompts.
 
-- **Resetar permissão do motor de vídeo** — runs `tccutil reset ScreenCapture dev.lizardbyte.app.Sunshine` to clear any zombie entry.
-- **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane so you can flip the toggle.
+When the bundle is replaced (each `./scripts/package_dmg.sh` rebuild + reinstall) macOS may still revoke the grant. The Dashboard detects that state automatically and surfaces a red banner with two actions:
+
+- **Resetar permissão do motor de vídeo** — runs `tccutil reset ScreenCapture org.macstream.host.engine.sunshine` (plus the legacy `dev.lizardbyte.app.Sunshine`) to clear zombie entries.
+- **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane so the toggle can be flipped again.
 
 After the Developer ID signing pass (release pipeline), grants persist across rebuilds and this manual recovery becomes unnecessary.
 

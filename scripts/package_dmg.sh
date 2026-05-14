@@ -221,8 +221,31 @@ echo "Created app bundle: $APP_DIR"
 # the toggle from scratch. Ad-hoc signing gives the bundle a stable cdhash so
 # TCC has something coherent to track, and is replaced by the proper Developer
 # ID signature in sign_and_notarize.sh when releasing.
+#
+# Crucially, `codesign --deep` does NOT descend into Contents/Resources, so we
+# must explicitly sign the embedded Sunshine.app and every nested framework
+# *before* signing the parent wrapper. The Tahoe TCC subsystem refuses to add
+# Sunshine to the Screen Recording list when the embedded app keeps its
+# upstream LizardByte Developer ID signature while the parent is ad-hoc — the
+# identities mismatch and Tahoe treats the pair as suspicious. fetch_sunshine.sh
+# already stripped the upstream signature; here we re-seal everything under a
+# single ad-hoc identity that matches the wrapper.
 if [[ -z "${DEVELOPER_ID_APPLICATION:-}" ]]; then
-  echo "Applying ad-hoc code signature (no DEVELOPER_ID_APPLICATION set)..."
+  EMBEDDED_SUNSHINE_APP="$SUNSHINE_BUNDLE_DEST/Sunshine.app"
+  if [[ -d "$EMBEDDED_SUNSHINE_APP" ]]; then
+    echo "Signing embedded Sunshine.app frameworks first..."
+    /usr/bin/find "$EMBEDDED_SUNSHINE_APP/Contents/Frameworks" \
+      \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
+      | xargs -0 -I {} /usr/bin/codesign --force --sign - --timestamp=none {} 2>/dev/null || true
+
+    echo "Signing embedded Sunshine.app wrapper ad-hoc..."
+    /usr/bin/codesign --force --deep --sign - \
+      --options runtime \
+      --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
+      "$EMBEDDED_SUNSHINE_APP" >/dev/null
+  fi
+
+  echo "Applying ad-hoc code signature to MacStream Host.app..."
   /usr/bin/codesign --force --deep --sign - \
     --options runtime \
     --entitlements "$ROOT_DIR/packaging/entitlements.plist" \

@@ -205,7 +205,7 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
                 id: .sunshineScreenRecording,
                 title: "Permissão de Gravação de Tela",
                 status: .fail,
-                detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard, depois ative o toggle 'Sunshine' em Ajustes do Sistema."
+                detail: "O motor de vídeo não tem permissão de Gravação de Tela. Use 'Resetar permissão do motor de vídeo' no Dashboard, depois adicione/ative 'MacStream Video Engine' em Ajustes do Sistema → Privacidade → Gravação do Áudio do Sistema e da Tela."
             )
         }
 

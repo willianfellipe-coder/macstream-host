@@ -102,6 +102,44 @@ echo "Staging Sunshine.app into Resources/sunshine/..."
 rm -rf "$RESOURCES_DIR/Sunshine.app"
 /usr/bin/ditto "$SOURCE_APP" "$RESOURCES_DIR/Sunshine.app"
 
+# macOS Tahoe (26+) refuses to grant Screen Recording to apps whose code-signing
+# identity differs from the responsible parent's. The upstream Sunshine.app is
+# signed with LizardByte's Developer ID (dev.lizardbyte.app.Sunshine), but our
+# MacStream Host parent is ad-hoc signed (no Developer ID yet) — Tahoe sees
+# them as unrelated identities and silently refuses to add the embedded
+# Sunshine to "Gravação do Áudio do Sistema e da Tela", which means the
+# encoder probe can never get a captured frame.
+#
+# Re-bundle Sunshine under our identity:
+#   - rewrite CFBundleIdentifier to a sub-namespace of org.macstream.host
+#   - rewrite CFBundleName so the System Settings entry reads "MacStream Video Engine"
+#   - strip the LizardByte signature so package_dmg.sh can re-sign the bundle
+#     ad-hoc with the same identity as MacStream Host.app
+PATCHED_PLIST="$RESOURCES_DIR/Sunshine.app/Contents/Info.plist"
+if [[ -f "$PATCHED_PLIST" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier org.macstream.host.engine.sunshine" "$PATCHED_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string org.macstream.host.engine.sunshine" "$PATCHED_PLIST"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName 'MacStream Video Engine'" "$PATCHED_PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleName string 'MacStream Video Engine'" "$PATCHED_PLIST"
+  # Add usage descriptions so newer macOS will accept the app for TCC.
+  for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
+    if ! /usr/libexec/PlistBuddy -c "Print :$key" "$PATCHED_PLIST" >/dev/null 2>&1; then
+      /usr/libexec/PlistBuddy -c "Add :$key string 'MacStream Video Engine needs this permission to stream the desktop.'" "$PATCHED_PLIST" || true
+    fi
+  done
+fi
+
+# Drop the upstream Developer ID signature; the wrapper package_dmg.sh will
+# re-sign Sunshine.app and every nested framework ad-hoc with our entitlements.
+if /usr/bin/codesign --verify "$RESOURCES_DIR/Sunshine.app" >/dev/null 2>&1; then
+  echo "Removing upstream Developer ID signature so the bundle can be re-signed..."
+  /usr/bin/codesign --remove-signature "$RESOURCES_DIR/Sunshine.app" 2>/dev/null || true
+  # Also strip nested frameworks/dylibs so the wrapper can re-seal them.
+  /usr/bin/find "$RESOURCES_DIR/Sunshine.app/Contents/Frameworks" \
+    \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
+    | xargs -0 -I {} /usr/bin/codesign --remove-signature {} 2>/dev/null || true
+fi
+
 LICENSE_PATH=""
 for candidate in \
   "$SOURCE_APP/Contents/Resources/LICENSE" \

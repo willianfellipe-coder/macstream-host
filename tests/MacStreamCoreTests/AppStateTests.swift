@@ -233,16 +233,20 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
-    func testResetSunshineScreenRecordingGrantInvokesTccutil() async {
+    func testResetSunshineScreenRecordingGrantInvokesTccutilForBothBundleIds() async {
+        // The current bundle id is our rewritten one, but older installs may
+        // have stamped the upstream LizardByte identifier into TCC, so we
+        // reset both to cover the upgrade path.
         let runner = CapturingCommandRunner()
         let permissions = MockPermissionManager()
         let appState = makeTestAppState(permissions: permissions, commandRunner: runner)
 
         await appState.resetSunshineScreenRecordingGrant()
 
-        let tccCall = runner.invocations.first { $0.executablePath == "/usr/bin/tccutil" }
-        XCTAssertNotNil(tccCall)
-        XCTAssertEqual(tccCall?.arguments, ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"])
+        let tccCalls = runner.invocations.filter { $0.executablePath == "/usr/bin/tccutil" }
+        XCTAssertEqual(tccCalls.count, 2)
+        XCTAssertEqual(tccCalls[0].arguments, ["reset", "ScreenCapture", "org.macstream.host.engine.sunshine"])
+        XCTAssertEqual(tccCalls[1].arguments, ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"])
         XCTAssertEqual(permissions.openedSettings, [.screenRecording])
     }
 
