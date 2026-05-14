@@ -638,6 +638,9 @@ struct AudioView: View {
     @EnvironmentObject private var appState: AppState
     @State private var audioDevices: [AudioDevice] = []
     @State private var routeStatus: CheckStatus = .unknown
+    @State private var currentOutputDevice: AudioDevice?
+    @State private var previousOutputDevice: AudioDevice?
+    @State private var isRoutingAudio = false
 
     var body: some View {
         PageContainer(title: "Audio", subtitle: "Dispositivos CoreAudio reais, rota preferida e configuração isolada do MacStream.") {
@@ -647,6 +650,59 @@ struct AudioView: View {
                 detail: blackHoleDetail,
                 status: appState.dashboard.blackHoleStatus.checkStatus
             )
+
+            GroupBox("Saída do sistema") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        StatusIcon(status: systemOutputStatus)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(currentOutputDevice?.name ?? "Saída desconhecida")
+                                .font(.headline)
+                            Text(systemOutputDetail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
+                    HStack {
+                        Button {
+                            Task {
+                                isRoutingAudio = true
+                                let result = await appState.routeSystemAudioToMacStream()
+                                if case .routed(let previous, _) = result, previous != nil {
+                                    previousOutputDevice = previous
+                                }
+                                await refreshSystemOutput()
+                                isRoutingAudio = false
+                            }
+                        } label: {
+                            Label("Rotear áudio para o MacStream", systemImage: "arrow.triangle.swap")
+                        }
+                        .disabled(isRoutingAudio || currentOutputIsBlackHole)
+
+                        if let restoreDevice = previousOutputDevice, currentOutputIsBlackHole {
+                            Button {
+                                Task {
+                                    isRoutingAudio = true
+                                    _ = await appState.restoreSystemAudioOutput(to: restoreDevice.id)
+                                    await refreshSystemOutput()
+                                    isRoutingAudio = false
+                                }
+                            } label: {
+                                Label("Restaurar \(restoreDevice.name)", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(isRoutingAudio)
+                        }
+                    }
+
+                    Text("Sem essa troca, o motor do MacStream lê silêncio mesmo com o roteamento dedicado configurado — o macOS continua tocando pelos alto-falantes. Para continuar ouvindo localmente enquanto transmite, crie um Multi-Output Device em Audio MIDI Setup com BlackHole + alto-falantes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             GroupBox("Modo de captura inicial") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -732,6 +788,31 @@ struct AudioView: View {
     private func reloadAudioDevices() async {
         audioDevices = await appState.audioDeviceManager.listAudioDevices()
         routeStatus = await appState.audioDeviceManager.validateAudioRoute()
+        await refreshSystemOutput()
+    }
+
+    private func refreshSystemOutput() async {
+        currentOutputDevice = await appState.audioDeviceManager.currentSystemOutputDevice()
+    }
+
+    private var currentOutputIsBlackHole: Bool {
+        guard let device = currentOutputDevice else { return false }
+        return DefaultBlackHoleManager.isBlackHole2chDevice(device)
+    }
+
+    private var systemOutputStatus: CheckStatus {
+        guard let device = currentOutputDevice else { return .warning }
+        return DefaultBlackHoleManager.isBlackHole2chDevice(device) ? .pass : .warning
+    }
+
+    private var systemOutputDetail: String {
+        if currentOutputIsBlackHole {
+            return "Sistema roteado para o canal virtual do MacStream — o motor captura este áudio e transmite ao Moonlight."
+        }
+        if currentOutputDevice == nil {
+            return "Não foi possível identificar o dispositivo de saída atual via CoreAudio."
+        }
+        return "O sistema está tocando neste dispositivo. Para o áudio chegar pelo Moonlight, troque para o roteamento do MacStream."
     }
 
     private func deviceDetail(_ device: AudioDevice) -> String {

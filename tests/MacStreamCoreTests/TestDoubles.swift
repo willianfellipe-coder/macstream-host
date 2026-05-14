@@ -164,17 +164,21 @@ final class MockAudioDeviceManager: AudioDeviceManaging {
     private let devices: [AudioDevice]
     private let captureMode: AudioCaptureMode
     private let routeStatus: CheckStatus?
+    private(set) var currentOutputID: String?
+    private(set) var routingCalls: [String] = []
 
     init(
         devices: [AudioDevice] = [
             AudioDevice(id: "test-built-in-output", name: "Mac Speakers", channels: 2, sampleRate: 48_000, isInput: false, isOutput: true, status: .available)
         ],
         captureMode: AudioCaptureMode = .nativeSystemAudio,
-        routeStatus: CheckStatus? = nil
+        routeStatus: CheckStatus? = nil,
+        currentOutputID: String? = "test-built-in-output"
     ) {
         self.devices = devices
         self.captureMode = captureMode
         self.routeStatus = routeStatus
+        self.currentOutputID = currentOutputID
     }
 
     func listAudioDevices() async -> [AudioDevice] {
@@ -191,6 +195,31 @@ final class MockAudioDeviceManager: AudioDeviceManaging {
         }
 
         return devices.isEmpty ? .warning : .pass
+    }
+
+    func currentSystemOutputDevice() async -> AudioDevice? {
+        guard let currentOutputID else { return nil }
+        return devices.first { $0.id == currentOutputID }
+    }
+
+    func routeSystemOutputToBlackHole() async -> AudioRoutingResult {
+        guard let blackHole = devices.first(where: DefaultBlackHoleManager.isBlackHole2chDevice) else {
+            return .targetDeviceUnavailable
+        }
+        return await routeSystemOutput(to: blackHole.id)
+    }
+
+    func routeSystemOutput(to deviceID: String) async -> AudioRoutingResult {
+        routingCalls.append(deviceID)
+        guard let target = devices.first(where: { $0.id == deviceID }) else {
+            return .targetDeviceUnavailable
+        }
+        if currentOutputID == deviceID {
+            return .alreadyRouted(currentDevice: target)
+        }
+        let previous = currentOutputID.flatMap { id in devices.first { $0.id == id } }
+        currentOutputID = deviceID
+        return .routed(previousDevice: previous, newDevice: target)
     }
 }
 

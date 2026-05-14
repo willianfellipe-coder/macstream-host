@@ -107,6 +107,97 @@ public final class DefaultAudioDeviceManager: AudioDeviceManaging {
 
         return devices.isEmpty ? .fail : .warning
     }
+
+    public func currentSystemOutputDevice() async -> AudioDevice? {
+        guard let deviceID = SystemAudioOutputRouter.currentDefaultOutputDevice() else {
+            return nil
+        }
+        let devices = await listAudioDevices()
+        return devices.first { $0.id == String(deviceID) }
+    }
+
+    public func routeSystemOutputToBlackHole() async -> AudioRoutingResult {
+        let devices = await listAudioDevices()
+        guard let blackHole = devices.first(where: DefaultBlackHoleManager.isBlackHole2chDevice) else {
+            return .targetDeviceUnavailable
+        }
+        return await routeSystemOutput(to: blackHole.id)
+    }
+
+    public func routeSystemOutput(to deviceID: String) async -> AudioRoutingResult {
+        guard let targetID = AudioDeviceID(deviceID) else {
+            return .routingFailed(message: "ID de dispositivo inválido: \(deviceID).")
+        }
+        let devices = await listAudioDevices()
+        guard let target = devices.first(where: { $0.id == deviceID }) else {
+            return .targetDeviceUnavailable
+        }
+
+        let currentID = SystemAudioOutputRouter.currentDefaultOutputDevice()
+        let currentDevice = currentID.flatMap { id in
+            devices.first { $0.id == String(id) }
+        }
+
+        if currentID == targetID, let currentDevice {
+            return .alreadyRouted(currentDevice: currentDevice)
+        }
+
+        switch SystemAudioOutputRouter.setDefaultOutputDevice(targetID) {
+        case .success:
+            return .routed(previousDevice: currentDevice, newDevice: target)
+        case .failure(let osStatus):
+            return .routingFailed(message: "CoreAudio recusou a troca (OSStatus \(osStatus)).")
+        }
+    }
+}
+
+/// Thin wrapper around the CoreAudio APIs that read and write the system's
+/// `kAudioHardwarePropertyDefaultOutputDevice`. Kept separate from
+/// `DefaultAudioDeviceManager` so unit tests can target the manager via
+/// dependency-injected fakes without going through real CoreAudio calls.
+enum SystemAudioOutputRouter {
+    static func currentDefaultOutputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = 0
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &deviceID
+        )
+        guard status == noErr, deviceID != 0 else { return nil }
+        return deviceID
+    }
+
+    enum SetResult: Equatable {
+        case success
+        case failure(OSStatus)
+    }
+
+    static func setDefaultOutputDevice(_ deviceID: AudioDeviceID) -> SetResult {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var mutableID = deviceID
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size),
+            &mutableID
+        )
+        return status == noErr ? .success : .failure(status)
+    }
 }
 
 public final class CoreAudioDeviceProvider: AudioDeviceProviding {

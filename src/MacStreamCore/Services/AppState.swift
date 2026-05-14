@@ -408,6 +408,46 @@ public final class AppState: ObservableObject {
         await saveSettings(settings, successMessage: "Politica de privacidade salva.")
     }
 
+    /// Tries to route the system's default audio output to BlackHole 2ch
+    /// so the engine can actually capture system audio. Surfaces a user-
+    /// readable message and lets the caller know whether the previous
+    /// device should be remembered for a "restore" action.
+    @discardableResult
+    public func routeSystemAudioToMacStream() async -> AudioRoutingResult {
+        let result = await audioDeviceManager.routeSystemOutputToBlackHole()
+        switch result {
+        case .routed(let previous, let new):
+            let restore = previous.map { " (anterior: \($0.name))" } ?? ""
+            lastOperationMessage = "Saída do sistema agora é \(new.name)\(restore)."
+        case .alreadyRouted(let current):
+            lastOperationMessage = "Saída do sistema já está em \(current.name)."
+        case .targetDeviceUnavailable:
+            lastOperationMessage = "Roteamento de áudio do MacStream não está disponível. Conclua a instalação do mecanismo de áudio em Components."
+        case .routingFailed(let message):
+            lastOperationMessage = "Não foi possível trocar a saída do sistema: \(message)"
+        }
+        return result
+    }
+
+    /// Restores the system output device to the given identifier — used by
+    /// the UI to put the previous device back after the user finishes a
+    /// streaming session.
+    @discardableResult
+    public func restoreSystemAudioOutput(to deviceID: String) async -> AudioRoutingResult {
+        let result = await audioDeviceManager.routeSystemOutput(to: deviceID)
+        switch result {
+        case .routed(_, let new):
+            lastOperationMessage = "Saída do sistema restaurada para \(new.name)."
+        case .alreadyRouted(let current):
+            lastOperationMessage = "Saída do sistema já está em \(current.name)."
+        case .targetDeviceUnavailable:
+            lastOperationMessage = "Dispositivo de áudio anterior não está mais disponível."
+        case .routingFailed(let message):
+            lastOperationMessage = "Não foi possível restaurar a saída do sistema: \(message)"
+        }
+        return result
+    }
+
     public func lockHostForPrivacy() async {
         switch runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:

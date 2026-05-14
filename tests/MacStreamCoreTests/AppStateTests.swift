@@ -265,4 +265,69 @@ final class AppStateTests: XCTestCase {
         appState.clearAppPassword()
         XCTAssertFalse(appState.isAppPasswordSet)
     }
+
+    @MainActor
+    func testRouteSystemAudioReportsRoutedWhenBlackHoleAvailable() async {
+        let speakers = AudioDevice(id: "1", name: "Alto-falantes do Mac", channels: 2, isInput: false, isOutput: true, status: .available)
+        let blackHole = AudioDevice(id: "2", name: "BlackHole 2ch", channels: 2, isInput: true, isOutput: true, status: .available)
+        let mockAudio = MockAudioDeviceManager(devices: [speakers, blackHole], currentOutputID: speakers.id)
+        let appState = makeTestAppState(audio: mockAudio)
+
+        let result = await appState.routeSystemAudioToMacStream()
+
+        if case .routed(let previous, let new) = result {
+            XCTAssertEqual(previous?.name, "Alto-falantes do Mac")
+            XCTAssertEqual(new.name, "BlackHole 2ch")
+        } else {
+            XCTFail("Expected .routed, got \(result)")
+        }
+        XCTAssertEqual(appState.lastOperationMessage,
+                       "Saída do sistema agora é BlackHole 2ch (anterior: Alto-falantes do Mac).")
+        XCTAssertEqual(mockAudio.currentOutputID, blackHole.id)
+    }
+
+    @MainActor
+    func testRouteSystemAudioReportsAlreadyRoutedWhenOutputIsBlackHole() async {
+        let blackHole = AudioDevice(id: "2", name: "BlackHole 2ch", channels: 2, isInput: true, isOutput: true, status: .available)
+        let mockAudio = MockAudioDeviceManager(devices: [blackHole], currentOutputID: blackHole.id)
+        let appState = makeTestAppState(audio: mockAudio)
+
+        let result = await appState.routeSystemAudioToMacStream()
+
+        XCTAssertEqual(result, .alreadyRouted(currentDevice: blackHole))
+        XCTAssertEqual(appState.lastOperationMessage,
+                       "Saída do sistema já está em BlackHole 2ch.")
+    }
+
+    @MainActor
+    func testRouteSystemAudioReportsUnavailableWhenBlackHoleMissing() async {
+        let speakers = AudioDevice(id: "1", name: "Alto-falantes do Mac", channels: 2, isInput: false, isOutput: true, status: .available)
+        let mockAudio = MockAudioDeviceManager(devices: [speakers], currentOutputID: speakers.id)
+        let appState = makeTestAppState(audio: mockAudio)
+
+        let result = await appState.routeSystemAudioToMacStream()
+
+        XCTAssertEqual(result, .targetDeviceUnavailable)
+        XCTAssertEqual(appState.lastOperationMessage,
+                       "Roteamento de áudio do MacStream não está disponível. Conclua a instalação do mecanismo de áudio em Components.")
+    }
+
+    @MainActor
+    func testRestoreSystemAudioRollsBackToPreviousDevice() async {
+        let speakers = AudioDevice(id: "1", name: "Alto-falantes do Mac", channels: 2, isInput: false, isOutput: true, status: .available)
+        let blackHole = AudioDevice(id: "2", name: "BlackHole 2ch", channels: 2, isInput: true, isOutput: true, status: .available)
+        let mockAudio = MockAudioDeviceManager(devices: [speakers, blackHole], currentOutputID: blackHole.id)
+        let appState = makeTestAppState(audio: mockAudio)
+
+        let result = await appState.restoreSystemAudioOutput(to: speakers.id)
+
+        if case .routed(_, let new) = result {
+            XCTAssertEqual(new.name, "Alto-falantes do Mac")
+        } else {
+            XCTFail("Expected .routed, got \(result)")
+        }
+        XCTAssertEqual(appState.lastOperationMessage,
+                       "Saída do sistema restaurada para Alto-falantes do Mac.")
+        XCTAssertEqual(mockAudio.currentOutputID, speakers.id)
+    }
 }

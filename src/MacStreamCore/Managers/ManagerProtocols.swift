@@ -34,6 +34,22 @@ public protocol AudioDeviceManaging {
     func listAudioDevices() async -> [AudioDevice]
     func preferredCaptureMode() async -> AudioCaptureMode
     func validateAudioRoute() async -> CheckStatus
+
+    /// Returns the device the system is currently routing output to (the
+    /// "default output" device in Audio MIDI Setup). Returns nil when the
+    /// CoreAudio query fails or no default output is configured.
+    func currentSystemOutputDevice() async -> AudioDevice?
+
+    /// Switches the system's default audio output to BlackHole 2ch so the
+    /// engine actually captures something. Without this, Sunshine reads
+    /// silence regardless of `audio_sink = BlackHole 2ch` in the config.
+    /// The call doesn't require any TCC permission — it's plain CoreAudio
+    /// routing.
+    func routeSystemOutputToBlackHole() async -> AudioRoutingResult
+
+    /// Switches the system's default audio output to the provided device.
+    /// Used by the UI to restore the previous output after a routing.
+    func routeSystemOutput(to deviceID: String) async -> AudioRoutingResult
 }
 
 public protocol NetworkDiagnosticsManaging {

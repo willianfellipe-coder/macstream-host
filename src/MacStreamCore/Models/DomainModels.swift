@@ -816,6 +816,30 @@ public enum AudioCaptureMode: String, Codable, Equatable, Hashable, CaseIterable
     }
 }
 
+/// Result of toggling the system's default audio output device. Used by
+/// the AudioView "Rotear áudio para o MacStream" button to drive a clear
+/// success / no-op / failure message.
+public enum AudioRoutingResult: Equatable {
+    /// The system output device was changed. `previousDevice` is the
+    /// device the user was listening on before the toggle so the UI can
+    /// offer a "restore" action.
+    case routed(previousDevice: AudioDevice?, newDevice: AudioDevice)
+    /// The target device was already the default — nothing to do.
+    case alreadyRouted(currentDevice: AudioDevice)
+    /// The requested device isn't currently available on this Mac (e.g.
+    /// BlackHole 2ch driver missing).
+    case targetDeviceUnavailable
+    /// CoreAudio refused the change — usually returns a non-zero OSStatus.
+    case routingFailed(message: String)
+
+    public var didChangeOutput: Bool {
+        switch self {
+        case .routed: return true
+        default: return false
+        }
+    }
+}
+
 public struct MacStreamHostSettings: Codable, Equatable {
     public var sunshineBinaryPath: String?
     public var agentExecutablePath: String?
