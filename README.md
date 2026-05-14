@@ -49,7 +49,7 @@ Implemented now:
 - User LaunchAgent render/install/load/unload/remove without `sudo`, with plist and path validation.
 - `doctor --json`, `doctor --strict`, real log reading, zipped support bundle export, and soft reset of MacStream Host owned state.
 - Unsigned beta `.app` and optional drag-and-drop DMG packaging script with notices, build metadata, app icon, and SHA-256 checksum.
-- SwiftUI sidebar with Remote Work, Setup, Components, Advanced Engines, Audio, Network, Moonlight, Diagnostics, and Settings.
+- SwiftUI sidebar with Remote Work, Setup, Components, Motor (avançado), Audio, Network, Moonlight, Diagnostics, and Settings.
 - Domain models for Sunshine, BlackHole, permissions, audio, network, health checks, and streaming quality profiles.
 - Unit tests for status rules, health checks, configuration validation, app state, settings, logs, LaunchAgent, reset, and test doubles.
 - Safe diagnostic scripts that do not install, delete, request `sudo`, or modify system settings.
@@ -86,18 +86,24 @@ The final app will need to guide the user through macOS privacy and networking p
 
 MacStream Host does not bypass macOS permissions and does not use private Apple APIs.
 
-### Screen Recording for the embedded video engine
+### Post-install TCC grants (manual today)
 
-The video engine is the upstream `Sunshine.app` re-bundled under MacStream Host's identity namespace (`org.macstream.host.engine.sunshine`). `scripts/fetch_sunshine.sh` rewrites the bundle id and strips the upstream Developer ID signature so `scripts/package_dmg.sh` can re-seal the embedded app with the same ad-hoc identity as the wrapper. This is the only configuration macOS Tahoe (26+) reliably honors for TCC grants on apps inside other apps — keeping LizardByte's original Developer ID alongside our ad-hoc wrapper made Tahoe silently refuse to add the embedded engine to *Gravação do Áudio do Sistema e da Tela*.
+After installing or rebuilding MacStream Host, two TCC categories need
+to be granted before the first Moonlight session works end-to-end:
 
-On first run, grant Screen Recording **specifically to "MacStream Video Engine"** in *System Settings → Privacy & Security → Gravação do Áudio do Sistema e da Tela* (in older macOS this pane is called "Screen Recording"). The entry has to be added manually with the `+` button pointing at `/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app`. Once the toggle is on, MacStream Host can drive the engine without any further prompts.
+| Privacy category | Required entries | Why |
+|---|---|---|
+| **Gravação do Áudio do Sistema e da Tela** (Screen Recording) | `MacStream Host` + `MacStreamEngine` | The engine binary captures the screen; the host app shows the UI. |
+| **Acessibilidade** (Accessibility) | `MacStream Host` + `MacStreamEngine` + `macstream-agent` | Required for the engine to inject keyboard events from Moonlight. Without it touchpad still works, keyboard does not. |
 
-When the bundle is replaced (each `./scripts/package_dmg.sh` rebuild + reinstall) macOS may still revoke the grant. The Dashboard detects that state automatically and surfaces a red banner with two actions:
+Both binaries live inside `/Applications/MacStream Host.app/Contents/MacOS/` and have to be added manually to each list via the `+` button. `docs/POST_INSTALL.md` has the step-by-step.
 
-- **Resetar permissão do motor de vídeo** — runs `tccutil reset ScreenCapture org.macstream.host.engine.sunshine` (plus the legacy `dev.lizardbyte.app.Sunshine`) to clear zombie entries.
-- **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane so the toggle can be flipped again.
+The Dashboard detects when the engine reports "no screen capture permission" and surfaces a red banner with two actions:
 
-After the Developer ID signing pass (release pipeline), grants persist across rebuilds and this manual recovery becomes unnecessary.
+- **Resetar permissão de Gravação de Tela** — runs `tccutil reset ScreenCapture` for the current identity (`org.macstream.host`) plus the two legacy IDs (`org.macstream.host.engine.sunshine` and `dev.lizardbyte.app.Sunshine`) so stale grants from previous layouts are cleared.
+- **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane.
+
+Because the project signs ad-hoc by default, every `./scripts/package_dmg.sh` produces a new `cdhash` and TCC invalidates the grants. The `scripts/setup_local_codesign_identity.sh` (work-in-progress) is intended to make `cdhash` stable across builds so the grant survives; while that's in progress, treat the manual re-grant as part of the dev cycle.
 
 ## Sunshine On macOS
 
@@ -115,9 +121,11 @@ This repository includes:
 - `UPSTREAMS.md` for pinned upstream versions once selected.
 - `docs/gpl-compliance.md` with the release compliance strategy.
 
-MacStream Host does not bundle Sunshine or BlackHole inside this repository or the MacStream Host DMG. The app downloads pinned upstream artifacts at install time and verifies SHA-256 before use. Exact upstream refs, URLs and checksums are tracked in `UPSTREAMS.md`.
+The MacStream Host bundle now embeds the Sunshine binary directly (renamed to `MacStreamEngine` inside `Contents/MacOS/`), along with the dylibs Sunshine depends on (`libssl`, `libcrypto`, `libminiupnpc`) in `Contents/Frameworks/` and Sunshine's web assets in `Contents/Resources/assets/`. The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the upstream Sunshine release pinned in `UPSTREAMS.md`, verifies its SHA-256, strips the upstream signature, and re-signs every component with our identity (`Identifier=org.macstream.host`) so the engine inherits the host app's TCC subject.
 
-If future releases bundle Sunshine or BlackHole binaries directly, the exact upstream refs, corresponding source, build scripts, notices, and any modifications must be published.
+BlackHole is still downloaded at install time and opened in `Installer.app` rather than embedded — embedding the audio driver is tracked separately (`Fase E v2` in `/Users/will/.claude/plans/nada-ainda-moonlight-ainda-gentle-music.md`).
+
+Because the engine binary is now distributed as part of the MacStream Host DMG, the GPL-3 obligations attached to Sunshine apply: every release that ships the binary must also publish the exact upstream ref, corresponding source pointers, build scripts, modifications (zero today), and notices. Those are tracked in `UPSTREAMS.md` and `THIRD_PARTY_NOTICES.md`.
 
 ## Repository Layout
 

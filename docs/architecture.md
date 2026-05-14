@@ -54,7 +54,28 @@ Runtime code does not depend on mocks. Test doubles live under `tests/`. The Swi
 
 ### Dependency Installation Boundary
 
-MacStream Host can download pinned upstream artifacts at runtime and verify SHA-256 checksums before use. The video engine is installed into a user-scoped managed dependency directory. BlackHole is a CoreAudio driver, not a normal resident service, so MacStream Host downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval. The app controls the resulting audio route through detection, settings, config generation, and validation. It does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+MacStream Host now **ships the video engine inside the app bundle** as a renamed Mach-O helper (`MacStreamEngine`) at `Contents/MacOS/`, along with its dynamic libraries (`Contents/Frameworks/`) and assets (`Contents/Resources/assets/`). The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the pinned upstream Sunshine release, verifies its SHA-256, strips the upstream signature, and re-signs every component with our own identity (`Identifier=org.macstream.host`) so the engine binary is treated as part of the host app for TCC purposes. The engine never appears as a separate `.app` in `/Applications` and is not user-managed.
+
+BlackHole is a CoreAudio driver, not a normal resident service, so MacStream Host still downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval (this will be replaced by an embedded install with Authorization Services in a later phase). The app controls the resulting audio route through detection, settings, config generation, and validation. It does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
+
+### Bundle Layout
+
+```
+MacStream Host.app/Contents/
+├── MacOS/
+│   ├── MacStream Host       # SwiftUI app (the user-facing executable)
+│   ├── MacStreamEngine      # Renamed Sunshine binary (sibling of the app)
+│   ├── macstream-agent      # Resident user-LaunchAgent helper
+│   └── macstreamctl         # CLI helper (development / diagnostics)
+├── Frameworks/
+│   ├── libcrypto.3.dylib    # Sunshine deps, signed under same identity
+│   ├── libssl.3.dylib
+│   └── libminiupnpc.21.dylib
+└── Resources/
+    └── assets/              # Sunshine web panel assets (apps.json, web/)
+```
+
+All four binaries are codesigned with `--identifier org.macstream.host`, with the parent app signed *without* `--deep` so the helper's explicit identifier survives the parent's seal. With ad-hoc signing each binary still has its own `cdhash`, so TCC keys grants per-binary and the user has to add each binary that needs a category (Screen Recording, Accessibility) to the corresponding privacy list manually until a stable code-signing chain (Apple Developer ID or persistent self-signed identity) is in place. See `docs/POST_INSTALL.md` for the user-facing dance.
 
 ### Resident Agent
 
