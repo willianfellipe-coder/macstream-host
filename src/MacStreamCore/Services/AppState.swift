@@ -568,8 +568,16 @@ public final class AppState: ObservableObject {
 
     private func truncateSunshineLogs() {
         let logDir = runtimeSettings.logDirectoryURL
-        for fileName in ["sunshine.out.log", "sunshine.err.log"] {
-            let url = logDir.appendingPathComponent(fileName)
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates: [URL] = [
+            logDir.appendingPathComponent("sunshine.out.log"),
+            logDir.appendingPathComponent("sunshine.err.log"),
+            // Sunshine writes its own structured log here and that's the one
+            // we read for diagnostics. Truncating only the redirected stdout
+            // leaves stale crash dumps in this file forever.
+            home.appendingPathComponent(".config/sunshine/sunshine.log")
+        ]
+        for url in candidates {
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             try? Data().write(to: url, options: .atomic)
         }
@@ -977,7 +985,7 @@ public final class AppState: ObservableObject {
             OnboardingStep(id: .sunshine, title: "Verificar mecanismo de vídeo", state: stepState(for: dependencyStatus(.sunshine, dependencies)), detail: dependencies.first(where: { $0.id == .sunshine })?.detail ?? "Validar mecanismo de vídeo."),
             OnboardingStep(id: .blackHole, title: "Verificar roteamento de áudio", state: stepState(for: dependencyStatus(.blackHole, dependencies)), detail: dependencies.first(where: { $0.id == .blackHole })?.detail ?? "Validar roteamento de áudio."),
             OnboardingStep(id: .audio, title: "Configurar áudio", state: stepState(for: audioStatus), detail: audioStatus == .pass ? "Rota de áudio validada." : "Escolha captura nativa do macOS ou roteamento avançado."),
-            OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.runtimeGuidanceStatus), detail: dashboard.permissionsStatus.runtimeGuidanceStatus == .pass ? "Permissões conhecidas OK." : "Permissões do app são diagnóstico; erros reais de captura aparecem no teste da engine."),
+            OnboardingStep(id: .permissions, title: "Validar permissões", state: stepState(for: dashboard.permissionsStatus.aggregateStatus), detail: dashboard.permissionsStatus.aggregateStatus == .pass ? "Permissões críticas OK." : "Permissões críticas (Gravação de Tela ou Microfone) pendentes."),
             OnboardingStep(id: .configuration, title: "Gerar configuração", state: hasConfig ? .passed : .pending, detail: runtimeSettings.sunshineConfigURL.path),
             OnboardingStep(id: .startSunshine, title: "Iniciar streaming", state: dashboard.sunshineStatus.state == .running ? .passed : .pending, detail: dashboard.sunshineStatus.state.displayName),
             OnboardingStep(id: .webUI, title: "Abrir painel avançado", state: dashboard.sunshineStatus.webUIReachable ? .passed : .pending, detail: "https://localhost:47990"),

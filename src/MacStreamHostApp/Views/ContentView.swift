@@ -187,11 +187,11 @@ struct DashboardView: View {
 
                 StatusPanel(
                     title: "Permissões macOS",
-                    value: appState.dashboard.permissionsStatus.runtimeGuidanceStatus.displayName,
-                    detail: appState.dashboard.permissionsStatus.runtimeGuidanceStatus == .pass
-                        ? "Permissões conhecidas OK"
-                        : "Diagnóstico não bloqueante; a captura real é validada pela engine.",
-                    status: appState.dashboard.permissionsStatus.runtimeGuidanceStatus
+                    value: appState.dashboard.permissionsStatus.aggregateStatus.displayName,
+                    detail: appState.dashboard.permissionsStatus.aggregateStatus == .pass
+                        ? "Permissões críticas OK; Local Network/Accessibility são validadas pela engine quando precisam."
+                        : "Permissões críticas (Gravação de Tela ou Microfone) pendentes.",
+                    status: appState.dashboard.permissionsStatus.aggregateStatus
                 )
 
                 StatusPanel(

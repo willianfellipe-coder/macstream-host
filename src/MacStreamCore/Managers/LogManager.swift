@@ -20,7 +20,12 @@ public final class DefaultLogManager: LogManaging {
     }
 
     public func recentLogs(maxLines: Int) async -> [LogEntry] {
+        let homeURL = URL(fileURLWithPath: homePath)
         let files = [
+            // Sunshine writes most of its diagnostics to its own log under
+            // ~/.config/sunshine/sunshine.log regardless of what stdout we
+            // redirect, so we always tail that file first.
+            ("Sunshine", homeURL.appendingPathComponent(".config/sunshine/sunshine.log")),
             ("Sunshine stdout", logDirectoryURL.appendingPathComponent("sunshine.out.log")),
             ("Sunshine stderr", logDirectoryURL.appendingPathComponent("sunshine.err.log")),
             ("MacStream Host", logDirectoryURL.appendingPathComponent("macstream.log"))
