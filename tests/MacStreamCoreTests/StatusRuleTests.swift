@@ -59,4 +59,22 @@ final class StatusRuleTests: XCTestCase {
         XCTAssertEqual(locked.checkStatus, .pass)
         XCTAssertEqual(locked.displayLabel, "Tela bloqueada")
     }
+
+    func testRemoteWorkModeIsStreamingActive() {
+        // States where a Moonlight session is in flight — the privacy overlay
+        // suppresses its floating unlock panel and the stream-end watcher is
+        // running. Touching this set without thinking will regress the host
+        // lock behaviour (black strip in the remote feed, intercepted
+        // touchpad).
+        XCTAssertTrue(RemoteWorkModeState.running.isStreamingActive)
+        XCTAssertTrue(RemoteWorkModeState.degraded.isStreamingActive)
+        XCTAssertTrue(RemoteWorkModeState.starting.isStreamingActive)
+
+        // States where no client could possibly be attached — the unlock
+        // panel is safe to show and there is nothing to watch for.
+        XCTAssertFalse(RemoteWorkModeState.notReady.isStreamingActive)
+        XCTAssertFalse(RemoteWorkModeState.ready.isStreamingActive)
+        XCTAssertFalse(RemoteWorkModeState.stopping.isStreamingActive)
+        XCTAssertFalse(RemoteWorkModeState.blocked.isStreamingActive)
+    }
 }

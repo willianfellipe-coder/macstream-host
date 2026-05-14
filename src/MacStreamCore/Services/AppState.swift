@@ -435,7 +435,7 @@ public final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             while !Task.isCancelled {
                 guard let self, self.privacyOverlayActive else { return }
-                if Self.sunshineSessionEndedAfter(activatedAt) {
+                if SunshineSessionTracker.sessionEndedAfter(activatedAt) {
                     _ = self.dismissPrivacyOverlay(passwordCandidate: nil, autoTriggered: true)
                     self.lastOperationMessage = "Sessão Moonlight encerrou. Tela do host restaurada automaticamente."
                     return
@@ -443,40 +443,6 @@ public final class AppState: ObservableObject {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
         }
-    }
-
-    /// Returns true when the most recent client connection lifecycle event in
-    /// the Sunshine log is a DISCONNECT that happened after `since`. We look
-    /// at both CONNECTED and DISCONNECTED lines to handle the case where a
-    /// new session started after a previous disconnect.
-    private static func sunshineSessionEndedAfter(_ since: Date) -> Bool {
-        let logURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/sunshine/sunshine.log")
-        guard let contents = try? String(contentsOf: logURL, encoding: .utf8) else {
-            return false
-        }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withFullDate, .withFullTime, .withSpaceBetweenDateAndTime, .withFractionalSeconds]
-        var latestConnectAt: Date?
-        var latestDisconnectAt: Date?
-        // Each line: `[YYYY-MM-DD HH:MM:SS.SSS]: Info: CLIENT CONNECTED`
-        for rawLine in contents.split(whereSeparator: \.isNewline).suffix(2000) {
-            let line = String(rawLine)
-            guard let openBracket = line.firstIndex(of: "["),
-                  let closeBracket = line.firstIndex(of: "]"),
-                  openBracket < closeBracket else { continue }
-            let rawDate = line[line.index(after: openBracket)..<closeBracket]
-                .replacingOccurrences(of: " ", with: "T") + "Z"
-            guard let date = formatter.date(from: rawDate) else { continue }
-            if line.contains("CLIENT CONNECTED") {
-                latestConnectAt = date
-            } else if line.contains("CLIENT DISCONNECTED") {
-                latestDisconnectAt = date
-            }
-        }
-        guard let disconnect = latestDisconnectAt, disconnect > since else { return false }
-        if let connect = latestConnectAt, connect > disconnect { return false }
-        return true
     }
 
     /// Whether the overlay should prompt for the app password before clearing.
