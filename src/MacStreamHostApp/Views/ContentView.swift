@@ -18,15 +18,15 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .dashboard: return "Remote Work"
-        case .setup: return "Setup"
-        case .dependencies: return "Components"
+        case .dashboard: return "Modo Remoto"
+        case .setup: return "Configuração"
+        case .dependencies: return "Componentes"
         case .sunshine: return "Motor (avançado)"
-        case .audio: return "Audio"
-        case .network: return "Network"
+        case .audio: return "Áudio"
+        case .network: return "Rede"
         case .moonlight: return "Moonlight"
-        case .diagnostics: return "Diagnostics"
-        case .settings: return "Settings"
+        case .diagnostics: return "Diagnóstico"
+        case .settings: return "Ajustes"
         }
     }
 
@@ -93,7 +93,7 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        PageContainer(title: "Remote Work", subtitle: "Prepare este Mac para uso remoto produtivo a partir do iPad ou outro cliente Moonlight.") {
+        PageContainer(title: "Modo Remoto", subtitle: "Prepare este Mac para uso remoto produtivo a partir do iPad ou outro cliente Moonlight.") {
             if appState.hasSunshineScreenRecordingFailure {
                 ScreenRecordingRecoveryBanner(
                     onReset: { Task { await appState.resetSunshineScreenRecordingGrant() } },
@@ -228,10 +228,10 @@ struct SetupView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Setup", subtitle: "Checklist seguro para preparar vídeo, áudio, rede e pareamento.") {
+        PageContainer(title: "Configuração", subtitle: "Checklist seguro para preparar vídeo, áudio, rede e pareamento.") {
             OnboardingStepList(steps: appState.onboardingSteps)
 
-            GroupBox("Preflight") {
+            GroupBox("Validação prévia") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         Button {
@@ -351,7 +351,7 @@ struct DependenciesView: View {
     @State private var showBlackHoleExplainer = false
 
     var body: some View {
-        PageContainer(title: "Components", subtitle: "Componentes gerenciados pelo MacStream para video, audio e pareamento.") {
+        PageContainer(title: "Componentes", subtitle: "Componentes gerenciados pelo MacStream para vídeo, áudio e pareamento.") {
             VStack(spacing: 12) {
                 ForEach(appState.dependencyStatuses) { dependency in
                     DependencyRow(dependency: dependency)
@@ -421,9 +421,9 @@ struct DependenciesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            GroupBox("Configurar engine de video manualmente") {
+            GroupBox("Configurar motor de vídeo manualmente") {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Se a engine de video não estiver no PATH padrão, informe o caminho do binário em Settings e revalide.")
+                    Text("Se o motor de vídeo não estiver no PATH padrão, informe o caminho do binário em Ajustes e revalide.")
                         .foregroundStyle(.secondary)
                     HStack {
                         Text(appState.runtimeSettings.sunshineBinaryPath ?? "Nenhum caminho manual configurado.")
@@ -443,7 +443,7 @@ struct DependenciesView: View {
             GroupBox("Política de instalação") {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Componentes upstream independentes aparecem aqui para compliance e suporte.", systemImage: "shippingbox")
-                    Label("A engine de video é baixada de release upstream fixado e instalada em diretório gerenciado pelo usuário.", systemImage: "checkmark.shield")
+                    Label("O motor de vídeo é embarcado a partir de release upstream fixado e re-assinado sob a identidade do MacStream Host.", systemImage: "checkmark.shield")
                     Label("O driver de audio é baixado de URL oficial, verificado por checksum e aberto no Installer.app.", systemImage: "safari")
                     Label("Portas de firewall não são alteradas automaticamente.", systemImage: "lock.shield")
                 }
@@ -488,7 +488,7 @@ struct SunshineView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Advanced Engines", subtitle: "Diagnóstico técnico das engines internas controladas pelo MacStream.") {
+        PageContainer(title: "Motor (avançado)", subtitle: "Diagnóstico técnico do motor de vídeo controlado pelo MacStream.") {
             StatusPanel(
                 title: "Engine de video",
                 value: appState.dashboard.sunshineStatus.state.displayName,
@@ -643,9 +643,9 @@ struct AudioView: View {
     @State private var isRoutingAudio = false
 
     var body: some View {
-        PageContainer(title: "Audio", subtitle: "Dispositivos CoreAudio reais, rota preferida e configuração isolada do MacStream.") {
+        PageContainer(title: "Áudio", subtitle: "Dispositivos CoreAudio detectados, rota preferida e roteamento do sistema para o MacStream.") {
             StatusPanel(
-                title: "Rota de audio MacStream",
+                title: "Rota de áudio do MacStream",
                 value: appState.dashboard.blackHoleStatus.displayName,
                 detail: blackHoleDetail,
                 status: appState.dashboard.blackHoleStatus.checkStatus
@@ -831,7 +831,7 @@ struct NetworkView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Network", subtitle: "Diagnóstico local de IP, portas do mecanismo de streaming e orientação para VPN mesh.") {
+        PageContainer(title: "Rede", subtitle: "Diagnóstico local de IP, portas do motor de streaming e orientação para VPN mesh.") {
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(appState.dashboard.networkStatus.localAddresses, id: \.self) { address in
@@ -893,7 +893,7 @@ struct MoonlightView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Moonlight", subtitle: "Guia de pareamento sem depender de APIs internas do mecanismo de vídeo.") {
+        PageContainer(title: "Moonlight", subtitle: "Guia de pareamento sem depender de APIs internas do motor de vídeo.") {
             GroupBox("Acesso rápido") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
@@ -987,7 +987,7 @@ struct DiagnosticsView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        PageContainer(title: "Diagnostics", subtitle: "Health check inicial com diagnósticos locais seguros e regras testáveis.") {
+        PageContainer(title: "Diagnóstico", subtitle: "Verificação de saúde com diagnósticos locais seguros e regras testáveis.") {
             StatusPanel(
                 title: "Resultado",
                 value: appState.healthCheckResult.status.displayName,
@@ -1057,7 +1057,7 @@ struct SettingsView: View {
     @State private var passwordFormError: String?
 
     var body: some View {
-        PageContainer(title: "Settings", subtitle: "Preferências locais usadas pelo app e pelo CLI.") {
+        PageContainer(title: "Ajustes", subtitle: "Preferências locais usadas pelo app e pelo CLI.") {
             GroupBox("Paths") {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("Caminho manual do mecanismo de vídeo", text: $sunshineBinaryPath)
@@ -1466,7 +1466,7 @@ struct SettingsView: View {
             case .launchAgent(.remove):
                 return "O app vai remover apenas o plist com.macstream.host.agent.plist criado pelo MacStream Host."
             case .softReset:
-                return "O app vai parar somente a engine owned pelo MacStream Host, remover o LaunchAgent do app e arquivar a configuração isolada."
+                return "O app vai parar somente o motor controlado pelo MacStream Host, remover o LaunchAgent do app e arquivar a configuração."
             }
         }
 
@@ -1587,6 +1587,10 @@ struct ScreenRecordingRecoveryBanner: View {
                     Text("O macOS revoga essa permissão a cada reinstalação do app. Resete e ative o toggle novamente para destravar a sessão.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text("Lembre de adicionar **MacStream Host** e **MacStreamEngine** em Gravação de Tela, e os mesmos dois (mais `macstream-agent`) em Acessibilidade — sem isso o teclado pelo Moonlight não funciona. docs/POST_INSTALL.md tem o passo-a-passo.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
             }
@@ -1603,6 +1607,22 @@ struct ScreenRecordingRecoveryBanner: View {
                     onOpenSettings()
                 } label: {
                     Label("Abrir Ajustes de Gravação de Tela", systemImage: "gearshape")
+                }
+
+                Button {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("Abrir Ajustes de Acessibilidade", systemImage: "accessibility")
+                }
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        URL(fileURLWithPath: "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine")
+                    ])
+                } label: {
+                    Label("Revelar binário no Finder", systemImage: "folder")
                 }
 
                 Spacer()

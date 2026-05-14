@@ -87,13 +87,13 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
                 id: .webUI,
                 title: "Pareamento",
                 status: sunshine.webUIReachable ? .pass : .warning,
-                detail: sunshine.webUIReachable ? "Interface local de pareamento esta acessivel." : "Pareamento sera validado quando a engine estiver rodando."
+                detail: sunshine.webUIReachable ? "Interface local de pareamento está acessível." : "Pareamento será validado quando o motor estiver rodando."
             ),
             HealthCheck(
                 id: .blackHole,
-                title: "Rota de audio gerenciada",
+                title: "Roteamento de áudio",
                 status: blackHole.checkStatus,
-                detail: blackHole == .installed ? "Driver de audio gerenciado detectado." : "Audio pode exigir instalacao/validacao guiada."
+                detail: blackHole == .installed ? "Roteamento de áudio do MacStream detectado." : "Áudio pode exigir instalação/validação guiada."
             ),
             HealthCheck(
                 id: .permissions,
@@ -161,20 +161,20 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         switch status.state {
         case .running:
             if let binaryPath = status.binaryPath {
-                return "Engine de video gerenciada esta rodando. Binario interno em \(binaryPath)."
+                return "Motor de vídeo do MacStream rodando. Binário interno em \(binaryPath)."
             }
-            return "Engine de video esta rodando, mas o binario ainda nao foi localizado."
+            return "Motor de vídeo rodando, mas o binário ainda não foi localizado."
         case .stopped:
             if let binaryPath = status.binaryPath {
-                return "Engine de video detectada em \(binaryPath), mas nao esta rodando."
+                return "Motor de vídeo detectado em \(binaryPath), mas não está rodando."
             }
-            return "Engine de video detectada, mas nao esta rodando."
+            return "Motor de vídeo detectado, mas não está rodando."
         case .notInstalled:
-            return "Instale/prepare a engine de video do MacStream antes de iniciar o modo remoto."
+            return "Reinstale o MacStream Host — o motor de vídeo embarcado não foi encontrado no bundle."
         case .failed:
-            return "Consultar logs da engine de video para identificar a causa."
+            return "Consulte os logs do motor de vídeo para identificar a causa."
         default:
-            return "Engine de video ainda nao foi iniciada pelo MacStream."
+            return "Motor de vídeo ainda não foi iniciado pelo MacStream."
         }
     }
 
@@ -221,17 +221,17 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         if joined.contains("unrecognized configurable option") {
             return HealthCheck(
                 id: .sunshineRuntime,
-                title: "Runtime da engine de video",
+                title: "Runtime do motor de vídeo",
                 status: .warning,
-                detail: "A engine de video reportou uma opcao de configuracao nao reconhecida. Regere a configuracao isolada."
+                detail: "O motor de vídeo reportou uma opção de configuração não reconhecida. Regere a configuração."
             )
         }
 
         return HealthCheck(
             id: .sunshineRuntime,
-            title: "Runtime da engine de video",
+            title: "Runtime do motor de vídeo",
             status: .pass,
-            detail: "Nenhum erro critico recente foi encontrado nos logs da engine de video."
+            detail: "Nenhum erro crítico recente foi encontrado nos logs do motor de vídeo."
         )
     }
 
