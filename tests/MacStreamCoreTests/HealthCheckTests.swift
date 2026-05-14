@@ -99,7 +99,12 @@ final class HealthCheckTests: XCTestCase {
         XCTAssertTrue(screenCheck?.detail.contains("Gravação de Tela") == true)
     }
 
-    func testHealthCheckSkipsStaleScreenRecordingFailureWhenSunshineIsRunning() async {
+    func testHealthCheckSurfacesEncoderProbeFailureEvenWhenSunshineIsRunning() async {
+        // macOS 14.5+/Sequoia: missing Screen Recording grant no longer crashes
+        // Sunshine — it returns nil displays so the encoder probe fails while
+        // the HTTP server stays alive. The user is stuck (Moonlight gets
+        // "Failed to initialize video capture") but the engine reports
+        // "running". The health banner must still fire.
         let service = DefaultHealthCheckService(
             sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
             blackHoleManager: MockBlackHoleManager(status: .installed),
@@ -108,15 +113,19 @@ final class HealthCheckTests: XCTestCase {
             networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
             launchAgentManager: MockLaunchAgentManager(status: .loaded),
             logManager: MockLogManager(entries: [
-                LogEntry(subsystem: "Sunshine stderr", message: "*** NSInvalidArgumentException initWithObjects:forKeys:count:"),
-                LogEntry(subsystem: "Sunshine stderr", message: "+[AVVideo displayNames] + 252")
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Sunshine version: 2026.508.45922 commit: deadbeef"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Trying encoder [videotoolbox]"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Encoder [videotoolbox] failed"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Encoder [software] failed"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Fatal: Unable to find display or encoder during startup.")
             ])
         )
 
         let result = await service.runHealthCheck()
         let screenCheck = result.checks.first { $0.id == .sunshineScreenRecording }
 
-        XCTAssertNil(screenCheck, "Sunshine running means TCC works now — stale logs must not raise the banner.")
+        XCTAssertEqual(screenCheck?.status, .fail)
+        XCTAssertTrue(screenCheck?.detail.contains("Gravação de Tela") == true)
     }
 
     func testHealthCheckIgnoresStaleSunshineErrorsBeforeLatestStartup() async {

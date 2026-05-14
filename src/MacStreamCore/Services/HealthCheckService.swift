@@ -194,38 +194,27 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
 
         let currentStartupMessages = messagesFromCurrentSunshineStartup(sunshineMessages)
         let joined = currentStartupMessages.joined(separator: "\n").lowercased()
-        let sunshineRunning = await sunshineManager.status().state == .running
 
-        // If the engine is currently running, the user already fixed the TCC
-        // issue (Sunshine couldn't have started capturing otherwise). Stale
-        // crash dumps in sunshine.err.log don't represent the live state.
-        if sunshineRunning == false {
-            if detectsScreenRecordingTccCrash(joined) {
-                return HealthCheck(
-                    id: .sunshineScreenRecording,
-                    title: "Permissão de Gravação de Tela",
-                    status: .fail,
-                    detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard e ative o toggle em Ajustes do Sistema."
-                )
-            }
-
-            if joined.contains("no screen capture permission") {
-                return HealthCheck(
-                    id: .sunshineScreenRecording,
-                    title: "Permissão de Gravação de Tela",
-                    status: .fail,
-                    detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
-                )
-            }
+        // Detect Screen Recording TCC failures across every macOS version we
+        // care about. On older macOS the missing grant crashed Sunshine; on
+        // 14.5+/Sequoia the API now returns nil silently and Sunshine reports
+        // an encoder-startup failure instead. Both shapes mean the same thing:
+        // the embedded video engine has no permission to capture the screen.
+        if detectsScreenRecordingTccFailure(joined) {
+            return HealthCheck(
+                id: .sunshineScreenRecording,
+                title: "Permissão de Gravação de Tela",
+                status: .fail,
+                detail: "O motor de vídeo não tem permissão de Gravação de Tela. O macOS revoga essa permissão a cada reinstalação do app — use o botão 'Resetar permissão do motor de vídeo' no Dashboard, depois ative o toggle 'Sunshine' em Ajustes do Sistema."
+            )
         }
 
-        if joined.contains("video failed to find working encoder")
-            || joined.contains("unable to find display or encoder") {
+        if joined.contains("no screen capture permission") {
             return HealthCheck(
-                id: .sunshineRuntime,
-                title: "Runtime da engine de video",
+                id: .sunshineScreenRecording,
+                title: "Permissão de Gravação de Tela",
                 status: .fail,
-                detail: "A engine de video iniciou, mas nao encontrou encoder/display funcional. Corrija permissoes de tela e valide os logs antes de parear."
+                detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
             )
         }
 
@@ -246,18 +235,35 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         )
     }
 
-    /// Detects the AVVideo displayNames crash, which happens when ScreenCaptureKit
-    /// (called transitively by Sunshine) returns nil display lists because the
-    /// process has no Screen Recording grant. The crash dies before Sunshine
-    /// itself logs "no screen capture permission", so we read the Objective-C
-    /// exception signature directly.
-    private func detectsScreenRecordingTccCrash(_ joined: String) -> Bool {
+    /// Recognises every signature we've seen for "Sunshine has no Screen
+    /// Recording grant" across recent macOS versions:
+    ///
+    /// - Older macOS: the API returned `nil` displays which Sunshine fed
+    ///   straight into `+[NSDictionary dictionaryWithObjects:forKeys:count:]`
+    ///   and crashed with `NSInvalidArgumentException` / `+[AVVideo displayNames]`.
+    /// - macOS 14.5+/Sequoia: the API silently returns no displays. Sunshine's
+    ///   encoder probing then fails with `Encoder [videotoolbox] failed` +
+    ///   `Encoder [software] failed` + `Unable to find display or encoder
+    ///   during startup` / `Please check that a display is connected`. The
+    ///   process keeps the HTTP server alive even though capture is broken,
+    ///   so this is the only way to spot it from outside.
+    private func detectsScreenRecordingTccFailure(_ joined: String) -> Bool {
         let hasNilInsertException =
             joined.contains("nsinvalidargumentexception")
                 && joined.contains("initwithobjects:forkeys:count:")
                 && joined.contains("attempt to insert nil object")
         let hasDisplayNamesFrame = joined.contains("avvideo displaynames")
-        return hasNilInsertException || hasDisplayNamesFrame
+        let hasNoDisplayDuringStartup =
+            joined.contains("unable to find display or encoder during startup")
+                || (joined.contains("please check that a display is connected")
+                    && joined.contains("encoder"))
+        let hasFailedEncoderProbe =
+            joined.contains("encoder [videotoolbox] failed")
+                && joined.contains("encoder [software] failed")
+        return hasNilInsertException
+            || hasDisplayNamesFrame
+            || hasNoDisplayDuringStartup
+            || hasFailedEncoderProbe
     }
 
     private func messagesFromCurrentSunshineStartup(_ messages: [String]) -> [String] {
