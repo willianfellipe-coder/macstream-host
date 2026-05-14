@@ -205,7 +205,7 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
                 id: .sunshineScreenRecording,
                 title: "Permissão de Gravação de Tela",
                 status: .fail,
-                detail: "O motor de vídeo não tem permissão de Gravação de Tela. Use 'Resetar permissão do motor de vídeo' no Dashboard, depois adicione/ative 'MacStream Video Engine' em Ajustes do Sistema → Privacidade → Gravação do Áudio do Sistema e da Tela."
+                detail: "O motor de vídeo não tem permissão de Gravação de Tela. Abra Ajustes do Sistema → Privacidade → Gravação do Áudio do Sistema e da Tela e ative 'MacStream Host'."
             )
         }
 
@@ -214,7 +214,7 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
                 id: .sunshineScreenRecording,
                 title: "Permissão de Gravação de Tela",
                 status: .fail,
-                detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative para 'Sunshine'."
+                detail: "O motor de vídeo reportou ausência de permissão de Gravação de Tela. Abra Ajustes do Sistema e ative 'MacStream Host'."
             )
         }
 
@@ -309,7 +309,7 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             return "IP local \(primaryAddress); Tailscale \(tailscaleAddress)."
         }
 
-        return "IP local \(primaryAddress). Portas Sunshine foram verificadas localmente."
+        return "IP local \(primaryAddress). Portas do motor foram verificadas localmente."
     }
 
     private func permissionDetail(for permissions: MacOSPermissionsStatus) -> String {

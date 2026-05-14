@@ -496,25 +496,25 @@ public final class AppState: ObservableObject {
     }
 
     public func createDefaultSunshineConfiguration() async {
-        await runSunshineOperation(successMessage: "Configuração padrão do Sunshine gerada.") {
+        await runSunshineOperation(successMessage: "Configuração padrão do motor gerada.") {
             _ = try configurationManager.writeDefaultFiles(overwrite: false, audioSink: runtimeSettings.audioSink)
         }
     }
 
     public func startSunshine() async {
-        await runSunshineOperation(successMessage: "Sunshine iniciado com ownership do MacStream Host.") {
+        await runSunshineOperation(successMessage: "Motor de vídeo iniciado.") {
             try await sunshineManager.start()
         }
     }
 
     public func stopSunshine() async {
-        await runSunshineOperation(successMessage: "Processo Sunshine owned pelo MacStream Host parado.") {
+        await runSunshineOperation(successMessage: "Motor de vídeo parado.") {
             try await sunshineManager.stop()
         }
     }
 
     public func restartSunshine() async {
-        await runSunshineOperation(successMessage: "Processo Sunshine owned pelo MacStream Host reiniciado.") {
+        await runSunshineOperation(successMessage: "Motor de vídeo reiniciado.") {
             try await sunshineManager.restart()
         }
     }
@@ -531,7 +531,7 @@ public final class AppState: ObservableObject {
     }
 
     public func openSunshineWebUI() async {
-        await runOperation(successMessage: "Web UI do Sunshine aberta.") {
+        await runOperation(successMessage: "Painel do motor aberto.") {
             try await sunshineManager.openWebUI()
         }
     }
@@ -542,17 +542,20 @@ public final class AppState: ObservableObject {
         }
     }
 
-    /// Resets the macOS TCC entry for the embedded video engine (Sunshine bundle
-    /// id) so a clean grant flow can run. macOS invalidates Screen Recording
-    /// grants when the host bundle is replaced; this command clears any zombie
-    /// entry, truncates the engine logs so stale crash dumps stop tripping the
-    /// detection banner, then opens the Screen Recording pane in System Settings.
+    /// Resets the macOS TCC entry so a clean grant flow can run. macOS
+    /// invalidates Screen Recording grants when the host bundle is replaced;
+    /// this command clears any zombie entries (including legacy entries from
+    /// when the engine was a separate sub-bundle), truncates the engine logs
+    /// so stale crash dumps stop tripping the detection banner, then opens the
+    /// Screen Recording pane in System Settings.
     public func resetSunshineScreenRecordingGrant() async {
-        // The embedded video engine ships under our identity namespace
-        // (see scripts/fetch_sunshine.sh). Reset that bundle id as well as
-        // the upstream identifier in case the user previously installed a
-        // build that still carried LizardByte's original Developer ID.
+        // After the flatten in the Etapa 1 rework, the engine inherits
+        // MacStream Host's TCC identity (org.macstream.host) — that's the only
+        // bundle id that matters now. We still reset the legacy sub-bundle id
+        // and the upstream LizardByte id in case the user is upgrading from
+        // an older build that left zombie entries in the TCC database.
         let bundleIDs = [
+            "org.macstream.host",
             "org.macstream.host.engine.sunshine",
             "dev.lizardbyte.app.Sunshine"
         ]
@@ -572,7 +575,7 @@ public final class AppState: ObservableObject {
         let result = CommandResult(exitCode: combinedExit, standardError: combinedError)
         truncateSunshineLogs()
         if result.exitCode == 0 {
-            lastOperationMessage = "Permissão do motor de vídeo resetada. Abra Ajustes do Sistema e ative o toggle para 'MacStream Video Engine' (se aparecer 'Sunshine' por causa de uma instalação anterior, ative esse também)."
+            lastOperationMessage = "Permissão de Gravação de Tela resetada. Abra Ajustes do Sistema e ative o toggle apenas para 'MacStream Host'."
         } else {
             let detail = result.standardError.isEmpty
                 ? "tccutil retornou código \(result.exitCode)."
@@ -934,8 +937,8 @@ public final class AppState: ObservableObject {
                 id: .sunshine,
                 status: sunshine.state == .notInstalled ? .fail : .pass,
                 detail: sunshine.state == .notInstalled
-                    ? "Instale o Sunshine ou selecione o binário manualmente."
-                    : "Sunshine detectado\(sunshine.binaryPath.map { " em \($0)" } ?? ".").",
+                    ? "Motor de vídeo não disponível. Reinstale o MacStream Host."
+                    : "Motor de vídeo pronto\(sunshine.binaryPath.map { " em \($0)" } ?? ".").",
                 detectedPath: sunshine.binaryPath,
                 detectedVersion: sunshine.version,
                 officialURL: URL(string: "https://github.com/LizardByte/Sunshine/releases")
@@ -944,7 +947,7 @@ public final class AppState: ObservableObject {
                 id: .blackHole,
                 status: blackHole.checkStatus,
                 detail: blackHole == .installed
-                    ? "BlackHole 2ch detectado para captura de áudio."
+                    ? "Roteamento de áudio do MacStream ativo."
                     : await blackHoleManager.installationGuidance(),
                 officialURL: URL(string: "https://github.com/ExistentialAudio/BlackHole")
             ),
@@ -1086,27 +1089,27 @@ public final class AppState: ObservableObject {
             ),
             SetupChecklistItem(
                 id: .sunshineInstalled,
-                title: "Verificar instalação do Sunshine",
+                title: "Verificar mecanismo de vídeo",
                 status: sunshine.state == .notInstalled ? .fail : .warning,
-                detail: "MVP inicial só detecta/orienta; não instala automaticamente."
+                detail: "Embarcado dentro do MacStream Host. Reinstale o app se faltar."
             ),
             SetupChecklistItem(
                 id: .blackHoleInstalled,
-                title: "Verificar instalação do BlackHole",
+                title: "Verificar roteamento de áudio",
                 status: blackHole.checkStatus,
-                detail: "BlackHole 2ch é fallback oficial; captura nativa precisa de validação."
+                detail: "Roteamento de áudio é o fallback oficial; captura nativa precisa de validação."
             ),
             SetupChecklistItem(
                 id: .audioConfiguration,
                 title: "Verificar configuração de áudio",
                 status: blackHole == .installed ? .pass : .warning,
-                detail: "Selecionar captura nativa ou BlackHole após testes reais."
+                detail: "Selecionar captura nativa ou roteamento dedicado após testes reais."
             ),
             SetupChecklistItem(
                 id: .networkPorts,
                 title: "Verificar portas/rede",
                 status: network.aggregateStatus,
-                detail: "Diagnóstico inicial cobre IP local e portas comuns do Sunshine."
+                detail: "Diagnóstico inicial cobre IP local e portas do motor."
             ),
             SetupChecklistItem(
                 id: .moonlightPairing,

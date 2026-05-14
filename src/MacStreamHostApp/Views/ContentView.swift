@@ -21,7 +21,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: return "Remote Work"
         case .setup: return "Setup"
         case .dependencies: return "Components"
-        case .sunshine: return "Advanced Engines"
+        case .sunshine: return "Motor (avançado)"
         case .audio: return "Audio"
         case .network: return "Network"
         case .moonlight: return "Moonlight"
@@ -580,14 +580,14 @@ struct SunshineView: View {
         }
 
         if sunshineStatus.state == .running {
-            return "Processo Sunshine externo detectado; o app não irá pará-lo."
+            return "Motor externo detectado; o app não irá pará-lo."
         }
 
         if let binaryPath = sunshineStatus.binaryPath {
             return "Binário detectado em \(binaryPath)."
         }
 
-        return "Sunshine ainda não foi detectado neste Mac."
+        return "Motor de vídeo ainda não foi detectado neste Mac."
     }
 
     private var actionGuidance: String {
@@ -596,14 +596,14 @@ struct SunshineView: View {
         }
 
         if sunshineStatus.state == .running && sunshineStatus.ownedProcessID == nil {
-            return "Há um Sunshine externo rodando. Start/stop ficam bloqueados para evitar conflito."
+            return "Há um motor externo rodando. Start/stop ficam bloqueados para evitar conflito."
         }
 
         if sunshineStatus.ownedProcessID == nil {
-            return "Gere a configuração isolada antes de iniciar o Sunshine pelo MacStream Host."
+            return "Gere a configuração antes de iniciar o motor pelo MacStream Host."
         }
 
-        return "Somente o processo owned pelo MacStream Host pode ser parado ou reiniciado."
+        return "Somente o motor controlado pelo MacStream Host pode ser parado ou reiniciado."
     }
 
     private var startDisabled: Bool {
@@ -662,10 +662,10 @@ struct AudioView: View {
                         Button {
                             Task { await appState.updateAudioCaptureMode(.blackHole2ch) }
                         } label: {
-                            Label("Usar BlackHole", systemImage: "dot.radiowaves.left.and.right")
+                            Label("Usar roteamento dedicado", systemImage: "dot.radiowaves.left.and.right")
                         }
                     }
-                    Text("Ao gerar a configuração isolada, o app grava `audio_sink = BlackHole 2ch` apenas quando esse modo estiver selecionado.")
+                    Text("Ao gerar a configuração, o app roteia o áudio para o canal virtual do MacStream apenas quando esse modo estiver selecionado.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -722,11 +722,11 @@ struct AudioView: View {
     private var blackHoleDetail: String {
         if appState.runtimeSettings.audioCaptureMode == .blackHole2ch {
             return appState.dashboard.blackHoleStatus == .installed
-                ? "A configuração isolada deve gravar audio_sink = BlackHole 2ch."
-                : "Instale externamente ou escolha captura nativa para continuar sem BlackHole."
+                ? "Roteamento dedicado configurado. Áudio do sistema é capturado pelo motor do MacStream."
+                : "Roteamento dedicado indisponível. Escolha captura nativa ou conclua a instalação do MacStream."
         }
 
-        return "Modo atual não depende de BlackHole, mas ele continua disponível como fallback."
+        return "Modo atual usa captura nativa. O roteamento dedicado fica disponível como fallback."
     }
 
     private func reloadAudioDevices() async {
@@ -782,7 +782,7 @@ struct NetworkView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text("Para teste remoto, prefira VPN mesh como Tailscale. Exposição pública direta de portas Sunshine deve ser avaliada fora deste MVP.")
+                    Text("Para teste remoto, prefira VPN mesh como Tailscale. Exposição pública direta das portas do motor deve ser avaliada fora deste MVP.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1154,7 +1154,7 @@ struct SettingsView: View {
                     } label: {
                         Label("Executar reset soft", systemImage: "arrow.counterclockwise")
                     }
-                    Text("Para somente o Sunshine owned pelo MacStream Host, remove o LaunchAgent do app e arquiva a configuração isolada. Não remove Sunshine, BlackHole ou configurações externas.")
+                    Text("Para o motor controlado pelo MacStream Host, remove o LaunchAgent do app e arquiva a configuração isolada. Não remove instalações externas ou roteamento de áudio do sistema.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

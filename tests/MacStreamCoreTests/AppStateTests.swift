@@ -23,12 +23,12 @@ final class AppStateTests: XCTestCase {
         await appState.startSunshine()
 
         XCTAssertEqual(appState.dashboard.sunshineStatus.state, .running)
-        XCTAssertEqual(appState.lastSunshineOperationMessage, "Sunshine iniciado com ownership do MacStream Host.")
+        XCTAssertEqual(appState.lastSunshineOperationMessage, "Motor de vídeo iniciado.")
 
         await appState.stopSunshine()
 
         XCTAssertEqual(appState.dashboard.sunshineStatus.state, .stopped)
-        XCTAssertEqual(appState.lastSunshineOperationMessage, "Processo Sunshine owned pelo MacStream Host parado.")
+        XCTAssertEqual(appState.lastSunshineOperationMessage, "Motor de vídeo parado.")
     }
 
     @MainActor
@@ -37,7 +37,7 @@ final class AppStateTests: XCTestCase {
 
         await appState.createDefaultSunshineConfiguration()
 
-        XCTAssertEqual(appState.lastSunshineOperationMessage, "Configuração padrão do Sunshine gerada.")
+        XCTAssertEqual(appState.lastSunshineOperationMessage, "Configuração padrão do motor gerada.")
     }
 
     @MainActor
@@ -234,9 +234,10 @@ final class AppStateTests: XCTestCase {
 
     @MainActor
     func testResetSunshineScreenRecordingGrantInvokesTccutilForBothBundleIds() async {
-        // The current bundle id is our rewritten one, but older installs may
-        // have stamped the upstream LizardByte identifier into TCC, so we
-        // reset both to cover the upgrade path.
+        // After the flatten, the parent bundle id is the only one that
+        // matters at runtime, but older installs may have stamped the legacy
+        // engine sub-bundle id and the upstream LizardByte identifier into
+        // TCC. Reset all three to cover every upgrade path.
         let runner = CapturingCommandRunner()
         let permissions = MockPermissionManager()
         let appState = makeTestAppState(permissions: permissions, commandRunner: runner)
@@ -244,9 +245,10 @@ final class AppStateTests: XCTestCase {
         await appState.resetSunshineScreenRecordingGrant()
 
         let tccCalls = runner.invocations.filter { $0.executablePath == "/usr/bin/tccutil" }
-        XCTAssertEqual(tccCalls.count, 2)
-        XCTAssertEqual(tccCalls[0].arguments, ["reset", "ScreenCapture", "org.macstream.host.engine.sunshine"])
-        XCTAssertEqual(tccCalls[1].arguments, ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"])
+        XCTAssertEqual(tccCalls.count, 3)
+        XCTAssertEqual(tccCalls[0].arguments, ["reset", "ScreenCapture", "org.macstream.host"])
+        XCTAssertEqual(tccCalls[1].arguments, ["reset", "ScreenCapture", "org.macstream.host.engine.sunshine"])
+        XCTAssertEqual(tccCalls[2].arguments, ["reset", "ScreenCapture", "dev.lizardbyte.app.Sunshine"])
         XCTAssertEqual(permissions.openedSettings, [.screenRecording])
     }
 
