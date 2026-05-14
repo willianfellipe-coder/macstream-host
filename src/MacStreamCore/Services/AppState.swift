@@ -38,6 +38,11 @@ public final class AppState: ObservableObject {
     private let agentRecoveryCooldown: TimeInterval = 60
     private let dateProvider: () -> Date
 
+    /// Background watcher that auto-dismisses the privacy overlay when the
+    /// Moonlight client disconnects. Created lazily when the host is locked
+    /// during an active session; cancelled on dismiss or app teardown.
+    private var streamEndWatcher: Task<Void, Never>?
+
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
     public private(set) var dependencyInstallerManager: DependencyInstalling
@@ -408,11 +413,70 @@ public final class AppState: ObservableObject {
         case .appOverlay:
             privacyOverlayActive = true
             lastOperationMessage = "Tela do host ocultada. O cliente remoto continua vendo o desktop. Clique 'Desbloquear' no Mac para sair."
+            startStreamEndWatcher()
         case .systemSuspend:
             await runRemoteWorkOperation {
                 try await remoteWorkSessionManager.lockHostForPrivacy()
             }
         }
+    }
+
+    /// Polls the Sunshine log every 2 seconds for `CLIENT DISCONNECTED` while
+    /// the host is locked during an active Moonlight session. When the most
+    /// recent disconnect arrives AFTER the lock activation, automatically
+    /// dismisses the privacy overlay so the user doesn't return to a Mac
+    /// stuck in lock mode after the remote session ends.
+    private func startStreamEndWatcher() {
+        streamEndWatcher?.cancel()
+        let activatedAt = dateProvider()
+        streamEndWatcher = Task { @MainActor [weak self] in
+            // Give the engine a beat to register the active session before we
+            // start checking — otherwise we may dismiss right after locking.
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            while !Task.isCancelled {
+                guard let self, self.privacyOverlayActive else { return }
+                if Self.sunshineSessionEndedAfter(activatedAt) {
+                    _ = self.dismissPrivacyOverlay(passwordCandidate: nil, autoTriggered: true)
+                    self.lastOperationMessage = "Sessão Moonlight encerrou. Tela do host restaurada automaticamente."
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    /// Returns true when the most recent client connection lifecycle event in
+    /// the Sunshine log is a DISCONNECT that happened after `since`. We look
+    /// at both CONNECTED and DISCONNECTED lines to handle the case where a
+    /// new session started after a previous disconnect.
+    private static func sunshineSessionEndedAfter(_ since: Date) -> Bool {
+        let logURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/sunshine/sunshine.log")
+        guard let contents = try? String(contentsOf: logURL, encoding: .utf8) else {
+            return false
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate, .withFullTime, .withSpaceBetweenDateAndTime, .withFractionalSeconds]
+        var latestConnectAt: Date?
+        var latestDisconnectAt: Date?
+        // Each line: `[YYYY-MM-DD HH:MM:SS.SSS]: Info: CLIENT CONNECTED`
+        for rawLine in contents.split(whereSeparator: \.isNewline).suffix(2000) {
+            let line = String(rawLine)
+            guard let openBracket = line.firstIndex(of: "["),
+                  let closeBracket = line.firstIndex(of: "]"),
+                  openBracket < closeBracket else { continue }
+            let rawDate = line[line.index(after: openBracket)..<closeBracket]
+                .replacingOccurrences(of: " ", with: "T") + "Z"
+            guard let date = formatter.date(from: rawDate) else { continue }
+            if line.contains("CLIENT CONNECTED") {
+                latestConnectAt = date
+            } else if line.contains("CLIENT DISCONNECTED") {
+                latestDisconnectAt = date
+            }
+        }
+        guard let disconnect = latestDisconnectAt, disconnect > since else { return false }
+        if let connect = latestConnectAt, connect > disconnect { return false }
+        return true
     }
 
     /// Whether the overlay should prompt for the app password before clearing.
@@ -441,15 +505,28 @@ public final class AppState: ObservableObject {
 
     @discardableResult
     public func dismissPrivacyOverlay(passwordCandidate: String? = nil) -> Bool {
-        if overlayUnlockRequiresPassword {
+        return dismissPrivacyOverlay(passwordCandidate: passwordCandidate, autoTriggered: false)
+    }
+
+    @discardableResult
+    private func dismissPrivacyOverlay(passwordCandidate: String?, autoTriggered: Bool) -> Bool {
+        // Auto-triggered dismisses come from the stream-end watcher and skip
+        // the password gate — the remote user is gone, so there's nothing to
+        // protect against. Manual dismisses still require the password when
+        // policy demands it.
+        if !autoTriggered, overlayUnlockRequiresPassword {
             guard let candidate = passwordCandidate,
                   appPasswordStore.verify(candidate) else {
                 lastOperationMessage = "Senha incorreta. Tente novamente."
                 return false
             }
         }
+        streamEndWatcher?.cancel()
+        streamEndWatcher = nil
         privacyOverlayActive = false
-        lastOperationMessage = "Tela do host restaurada."
+        if !autoTriggered {
+            lastOperationMessage = "Tela do host restaurada."
+        }
         return true
     }
 

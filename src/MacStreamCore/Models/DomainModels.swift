@@ -108,6 +108,17 @@ public enum RemoteWorkModeState: String, Codable, Equatable, CaseIterable {
         case .blocked: return .fail
         }
     }
+
+    /// True when the engine is actively or transitionally streaming. The
+    /// privacy overlay uses this to decide whether the floating unlock panel
+    /// should be suppressed (it leaks into the remote stream and intercepts
+    /// forwarded input from the client).
+    public var isStreamingActive: Bool {
+        switch self {
+        case .running, .degraded, .starting: return true
+        case .notReady, .ready, .stopping, .blocked: return false
+        }
+    }
 }
 
 public enum ManagedEngineKind: String, Codable, Hashable, CaseIterable {

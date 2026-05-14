@@ -29,18 +29,21 @@ final class PrivacyOverlayController {
     /// viewer goes dark while the framebuffer continues to be produced
     /// normally — Moonlight keeps seeing the live desktop and the remote user
     /// can keep working through the Mac. Sidecar/AirPlay displays are skipped
-    /// because dimming a wireless display can affect its framebuffer. A small
-    /// "Desbloquear" panel floats on the main screen so the local user can
-    /// dismiss the overlay. We **never** fall back to an NSWindow blackout —
-    /// that overlay leaks into ScreenCaptureKit and into the Moonlight feed.
-    func show() {
+    /// because dimming a wireless display can affect its framebuffer. When the
+    /// caller passes `suppressPanel: true` (because a Moonlight session is
+    /// active), we deliberately skip the floating unlock panel: even with
+    /// `sharingType = .none`, ScreenCaptureKit on macOS Sequoia still leaks
+    /// the panel into the captured frame and the panel intercepts forwarded
+    /// remote input. In that case the remote user can unlock through the menu
+    /// bar instead.
+    func show(suppressPanel: Bool = false) {
         guard unlockPanel == nil else { return }
 
         let result = brightness.dimAllDisplays()
         lastResult = result
         onDimResult(result)
 
-        if let mainScreen = NSScreen.main {
+        if !suppressPanel, let mainScreen = NSScreen.main {
             let panelSize = NSSize(width: 380, height: 220)
             let origin = NSPoint(
                 x: mainScreen.frame.midX - panelSize.width / 2,

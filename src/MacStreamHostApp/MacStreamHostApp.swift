@@ -37,7 +37,16 @@ struct MacStreamHostApp: App {
                 }
                 .onChange(of: appState.privacyOverlayActive) { _, isActive in
                     if isActive {
-                        privacyOverlayController?.show()
+                        // Suppress the floating unlock panel while a Moonlight
+                        // session is active: the panel renders a black-ish
+                        // surface that ScreenCaptureKit still picks up despite
+                        // sharingType=.none, AND its window level intercepts
+                        // mouse events forwarded from the remote client. When
+                        // streaming, only dim physical displays; the remote
+                        // user unlocks via the menu bar item.
+                        privacyOverlayController?.show(
+                            suppressPanel: appState.remoteWorkSession.state.isStreamingActive
+                        )
                     } else {
                         privacyOverlayController?.hide()
                     }
