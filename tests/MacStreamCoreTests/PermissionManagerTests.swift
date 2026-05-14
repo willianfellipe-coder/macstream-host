@@ -24,7 +24,11 @@ final class PermissionManagerTests: XCTestCase {
         XCTAssertEqual(status.aggregateStatus, .fail)
     }
 
-    func testPermissionManagerWarnsForLocalNetworkValidationOnly() async {
+    func testPermissionManagerPassesWhenOnlyNonCriticalLackValidation() async {
+        // Local Network and Accessibility are non-critical for the MVP, so the
+        // aggregate reports .pass when the critical permissions (Screen
+        // Recording, Microphone) are granted — the optional checks live on
+        // their own rows in the UI, but they don't degrade the headline.
         let manager = DefaultPermissionManager(
             statusProvider: FakePermissionStatusProvider(statuses: [
                 .screenRecording: .granted,
@@ -39,7 +43,8 @@ final class PermissionManagerTests: XCTestCase {
         let status = await manager.currentStatus()
 
         XCTAssertTrue(status.criticalPermissionsSatisfied)
-        XCTAssertEqual(status.aggregateStatus, .warning)
+        XCTAssertEqual(status.aggregateStatus, .pass)
+        XCTAssertEqual(status.runtimeGuidanceStatus, .warning, "runtimeGuidanceStatus still reflects every check, so the Setup screen can show per-item state.")
     }
 
     func testOpenSettingsDelegatesToOpener() async throws {

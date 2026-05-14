@@ -17,15 +17,30 @@ final class StatusRuleTests: XCTestCase {
         XCTAssertEqual(BlackHoleInstallationStatus.missing.checkStatus, .warning)
     }
 
-    func testCriticalPermissionsAggregate() {
+    func testPermissionsAggregateIgnoresNonCriticalNoise() {
+        // Local Network can never be confirmed from inside the app, and
+        // Accessibility is optional — neither should drag the aggregate down
+        // when the critical permissions (Screen Recording, Microphone) are
+        // satisfied.
         let permissions = MacOSPermissionsStatus(checks: [
             PermissionCheck(id: .screenRecording, status: .granted, detail: "OK"),
             PermissionCheck(id: .microphone, status: .granted, detail: "OK"),
-            PermissionCheck(id: .localNetwork, status: .granted, detail: "OK"),
+            PermissionCheck(id: .localNetwork, status: .requiresValidation, detail: "Validar"),
             PermissionCheck(id: .accessibility, status: .denied, detail: "Optional")
         ])
 
         XCTAssertTrue(permissions.criticalPermissionsSatisfied)
+        XCTAssertEqual(permissions.aggregateStatus, .pass)
+    }
+
+    func testPermissionsAggregateWarnsWhenCriticalMissing() {
+        let permissions = MacOSPermissionsStatus(checks: [
+            PermissionCheck(id: .screenRecording, status: .notDetermined, detail: "Pending"),
+            PermissionCheck(id: .microphone, status: .granted, detail: "OK"),
+            PermissionCheck(id: .localNetwork, status: .granted, detail: "OK"),
+            PermissionCheck(id: .accessibility, status: .granted, detail: "OK")
+        ])
+
         XCTAssertEqual(permissions.aggregateStatus, .warning)
     }
 

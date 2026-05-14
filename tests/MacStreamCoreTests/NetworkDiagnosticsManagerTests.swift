@@ -5,6 +5,11 @@ import XCTest
 
 final class NetworkDiagnosticsManagerTests: XCTestCase {
     func testNetworkDiagnosticsCombinesAddressesTailscaleAndPorts() async {
+        // UDP video/audio/control ports bind on demand when a client starts a
+        // session, so they're allowed to be `.warning` while the engine is
+        // simply idle. As long as the essential TCP ports (HTTPS/HTTP/Web UI)
+        // are listening and a local address exists, the network surface is
+        // healthy.
         let manager = DefaultNetworkDiagnosticsManager(
             addressProvider: FakeNetworkAddressProvider(addresses: ["192.168.1.20"]),
             portChecker: FakeNetworkPortChecker(statuses: [
@@ -24,6 +29,25 @@ final class NetworkDiagnosticsManagerTests: XCTestCase {
         XCTAssertEqual(result.tailscaleAddress, "100.64.0.10")
         XCTAssertEqual(result.portChecks.count, 2)
         XCTAssertEqual(result.portChecks.first?.status, .pass)
+        XCTAssertEqual(result.aggregateStatus, .pass)
+    }
+
+    func testNetworkDiagnosticsWarnsWhenEssentialTcpPortIsNotListening() async {
+        let manager = DefaultNetworkDiagnosticsManager(
+            addressProvider: FakeNetworkAddressProvider(addresses: ["192.168.1.20"]),
+            portChecker: FakeNetworkPortChecker(statuses: [
+                47984: .warning,
+                47998: .pass
+            ]),
+            tailscaleProvider: FakeTailscaleAddressProvider(address: nil),
+            sunshinePorts: [
+                SunshinePort(name: "HTTPS/nvhttp", protocolKind: .tcp, port: 47984),
+                SunshinePort(name: "Video", protocolKind: .udp, port: 47998)
+            ]
+        )
+
+        let result = await manager.runDiagnostics()
+
         XCTAssertEqual(result.aggregateStatus, .warning)
     }
 

@@ -730,15 +730,19 @@ public struct MacOSPermissionsStatus: Codable, Equatable {
             return .fail
         }
 
-        if checks.contains(where: { $0.status.checkStatus == .warning || $0.status.checkStatus == .fail }) {
+        // Only critical permissions (Screen Recording, Microphone) drag the
+        // aggregate down. Local Network is unmeasurable from inside the app
+        // and Accessibility is optional — surfacing them as warnings just
+        // because macOS can't confirm them from outside is misleading.
+        if criticalChecks.contains(where: { $0.status.checkStatus == .warning }) {
             return .warning
         }
 
-        if checks.allSatisfy({ $0.status.checkStatus == .pass }) {
-            return .pass
+        if checks.isEmpty {
+            return .unknown
         }
 
-        return .unknown
+        return .pass
     }
 
     public var runtimeGuidanceStatus: CheckStatus {
@@ -986,7 +990,19 @@ public struct NetworkDiagnosticResult: Codable, Equatable {
             return .fail
         }
 
-        if localAddresses.isEmpty || portChecks.contains(where: { $0.status == .warning }) {
+        if localAddresses.isEmpty {
+            return .warning
+        }
+
+        // Essential pairing/control ports — these need to be listening while
+        // the engine is up. RTSP and UDP video/audio/control/microphone ports
+        // bind on demand when a client actually starts a stream, so them not
+        // showing in `lsof` is informational, not a real warning.
+        let essentialPorts: Set<Int> = [47984, 47989, 47990]
+        let essentialChecks = portChecks.filter { essentialPorts.contains($0.port) }
+
+        if essentialChecks.isEmpty == false,
+           essentialChecks.contains(where: { $0.status == .warning || $0.status == .unknown }) {
             return .warning
         }
 
