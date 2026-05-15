@@ -79,6 +79,27 @@ private final class AgentRuntime {
     private var powerManager: PowerAssertionManaging?
     private var privacyManager: HostPrivacyManaging?
 
+    /// Set to true after a successful `.startRemoteWork`; reset on stop or
+    /// shutdown. When true and the engine isn't running, the supervision
+    /// loop attempts to bring it back. Without this flag we'd respawn an
+    /// engine the user explicitly stopped.
+    private var remoteWorkActive: Bool = false
+
+    /// Timestamps of recent auto-respawn attempts. Used to apply a
+    /// circuit-breaker: at most 3 restarts within a 60-second window so a
+    /// persistently-crashing engine (e.g. permanent TCC failure) doesn't
+    /// burn the CPU in a tight restart loop.
+    private var engineRestartAttempts: [Date] = []
+    private let engineRestartWindow: TimeInterval = 60
+    private let engineRestartMaxAttempts: Int = 3
+
+    /// PID we expect the engine to be running with. Updated whenever we
+    /// see it healthy and used to detect transitions to "unexpectedly
+    /// dead" (the parent process didn't request a stop but the engine
+    /// stopped running anyway — typically the
+    /// `+[AVVideo displayNames]` NSDictionary-nil crash post sleep/wake).
+    private var lastSeenEnginePID: Int32?
+
     init() {
         commandDecoder = JSONDecoder()
         commandDecoder.dateDecodingStrategy = .iso8601
@@ -102,6 +123,13 @@ private final class AgentRuntime {
                 shouldExit = await handle(command, runtime: runtime, settings: settings)
             }
 
+            // Supervise the engine: when the user has asked for remote work
+            // to be active but the engine stopped running (Sunshine likes to
+            // crash with NSDictionary-nil after macOS revokes screen capture
+            // permission post sleep/wake), bring it back. Rate-limited so a
+            // permanently-broken engine doesn't enter a restart loop.
+            await superviseEngineIfNeeded(runtime: runtime, settings: settings)
+
             let report = await makeReport(runtime: runtime, settings: settings)
             do {
                 try runtime.agent.writeReport(report)
@@ -113,6 +141,56 @@ private final class AgentRuntime {
         }
 
         logger.info("macstream-agent exiting")
+    }
+
+    /// Re-spawns the video engine when it's supposed to be running but
+    /// isn't. Skips when the user has not started remote work mode, and
+    /// when the circuit-breaker has tripped.
+    private func superviseEngineIfNeeded(
+        runtime: Runtime,
+        settings: MacStreamHostSettings
+    ) async {
+        guard remoteWorkActive else { return }
+
+        let status = await runtime.sunshine.status()
+        switch status.state {
+        case .running:
+            // Healthy. Remember the current PID so we'd notice if it
+            // changed without us asking.
+            lastSeenEnginePID = status.ownedProcessID
+            return
+        case .notInstalled:
+            // Nothing to respawn — the binary is gone (rare, e.g. user
+            // moved the app out of /Applications mid-session).
+            logger.warn("engine binary missing while remote work is active; not attempting respawn")
+            remoteWorkActive = false
+            return
+        default:
+            break
+        }
+
+        let now = Date()
+        engineRestartAttempts.removeAll { now.timeIntervalSince($0) > engineRestartWindow }
+        guard engineRestartAttempts.count < engineRestartMaxAttempts else {
+            // Circuit broken — surface the situation but stop pounding.
+            // The user will see "Engine de video parada" in the dashboard
+            // and can intervene (re-grant Screen Recording, etc).
+            return
+        }
+
+        engineRestartAttempts.append(now)
+        let priorPIDDescription = lastSeenEnginePID.map { "(was pid \($0))" } ?? "(no prior pid)"
+        logger.warn("engine stopped unexpectedly \(priorPIDDescription); attempting respawn \(engineRestartAttempts.count)/\(engineRestartMaxAttempts)")
+
+        do {
+            try await runtime.sunshine.start()
+            logger.info("engine respawn succeeded")
+            // Refresh recorded PID on next loop iteration via the
+            // `.running` branch above. No need to capture it here — the
+            // resolver in DefaultSunshineManager.status() handles it.
+        } catch {
+            logger.error("engine respawn failed: \(error.localizedDescription)")
+        }
     }
 
     private func handle(
@@ -128,6 +206,11 @@ private final class AgentRuntime {
                 _ = try await runtime.power.acquire(policy: settings.powerPolicy)
                 try await runtime.sunshine.start()
                 logger.info("started remote work mode")
+                // Arm the supervision loop. From here on, an unexpected
+                // engine death triggers an auto-respawn (rate-limited).
+                remoteWorkActive = true
+                engineRestartAttempts.removeAll()
+                lastSeenEnginePID = nil
             } catch {
                 logger.error("failed to start remote work mode: \(error.localizedDescription)")
                 let report = await makeReport(
@@ -141,6 +224,12 @@ private final class AgentRuntime {
             return false
 
         case .stopRemoteWork:
+            // Disarm the supervision loop FIRST so a slow-stopping engine
+            // doesn't get respawned by us between the stop call and the
+            // process actually exiting.
+            remoteWorkActive = false
+            engineRestartAttempts.removeAll()
+            lastSeenEnginePID = nil
             do {
                 try await runtime.sunshine.stop()
                 logger.info("stopped remote work mode")
@@ -179,6 +268,11 @@ private final class AgentRuntime {
 
         case .shutdown:
             logger.info("shutdown command received")
+            // Same as stopRemoteWork — disarm before the actual stop call
+            // so we don't race the respawn supervisor.
+            remoteWorkActive = false
+            engineRestartAttempts.removeAll()
+            lastSeenEnginePID = nil
             do {
                 try await runtime.sunshine.stop()
             } catch {
