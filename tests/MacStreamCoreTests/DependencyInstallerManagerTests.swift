@@ -110,6 +110,79 @@ final class DependencyInstallerManagerTests: XCTestCase {
         }
         return directory
     }
+
+    func testEmbeddedBlackHoleInstallerURLReturnsNilWhenPkgMissing() async throws {
+        let root = try makeTemporaryDirectory()
+        let manager = DefaultDependencyInstallerManager(
+            settings: testSettings(root: root),
+            artifacts: [testArtifact(.blackHole, kind: .macOSPKG)],
+            commandRunner: FakeDependencyCommandRunner(),
+            downloader: StaticDependencyDownloader(contents: Data()),
+            embeddedBlackHoleLookup: { nil }
+        )
+        XCTAssertNil(manager.embeddedBlackHoleInstallerURL())
+    }
+
+    func testInstallEmbeddedBlackHoleShortCircuitsWhenDriverAlreadyPresent() async throws {
+        let root = try makeTemporaryDirectory()
+        // Pretend the driver is already installed by pointing the manager at
+        // a path that exists. AuthorizationExecuteWithPrivileges should NOT
+        // be called.
+        let fakeDriverDir = root.appendingPathComponent("BlackHole2ch.driver", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeDriverDir, withIntermediateDirectories: true)
+        let installer = SpyPrivilegedInstaller()
+
+        let manager = DefaultDependencyInstallerManager(
+            settings: testSettings(root: root),
+            artifacts: [testArtifact(.blackHole, kind: .macOSPKG)],
+            commandRunner: FakeDependencyCommandRunner(),
+            downloader: StaticDependencyDownloader(contents: Data()),
+            privilegedInstallerFactory: { installer },
+            embeddedBlackHoleLookup: { nil },
+            blackHoleDriverPath: fakeDriverDir.path
+        )
+
+        let result = try await manager.installEmbeddedBlackHole()
+
+        XCTAssertEqual(result.requiresUserCompletion, false)
+        XCTAssertEqual(result.installedPath, fakeDriverDir.path)
+        XCTAssertEqual(installer.invocations.count, 0,
+                       "Should not invoke installer when driver is already present")
+    }
+
+    func testInstallEmbeddedBlackHoleFallsBackToDownloadFlowWhenNoEmbeddedPkg() async throws {
+        let root = try makeTemporaryDirectory()
+        let runner = FakeDependencyCommandRunner()
+        // Use the same "payload" content the default testArtifact sha256 was
+        // computed against so the checksum check in downloadAndVerify passes.
+        let manager = DefaultDependencyInstallerManager(
+            settings: testSettings(root: root),
+            artifacts: [testArtifact(.blackHole, kind: .macOSPKG)],
+            commandRunner: runner,
+            downloader: StaticDependencyDownloader(contents: Data("payload".utf8)),
+            embeddedBlackHoleLookup: { nil },
+            blackHoleDriverPath: root.appendingPathComponent("nonexistent.driver").path
+        )
+
+        let result = try await manager.installEmbeddedBlackHole()
+
+        // The fallback path is downloadAndOpenBlackHoleInstaller which uses
+        // /usr/bin/open on the downloaded .pkg.
+        XCTAssertEqual(result.requiresUserCompletion, true)
+        XCTAssertTrue(runner.commands.contains { $0.executablePath == "/usr/bin/open" })
+    }
+}
+
+private final class SpyPrivilegedInstaller: PrivilegedInstaller {
+    struct Invocation {
+        let packageURL: URL
+    }
+    private(set) var invocations: [Invocation] = []
+
+    override func installPackage(at packageURL: URL) throws -> String {
+        invocations.append(Invocation(packageURL: packageURL))
+        return "(mock) Successfully installed"
+    }
 }
 
 private struct StaticDependencyDownloader: DependencyArtifactDownloading {

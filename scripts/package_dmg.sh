@@ -112,6 +112,18 @@ if [[ -f "$SUNSHINE_STAGE_DIR/LICENSE" ]]; then
   cp "$SUNSHINE_STAGE_DIR/LICENSE" "$RESOURCES_DIR/LICENSE-engine"
 fi
 
+# Embed BlackHole 2ch .pkg so DependencyInstallerManager can install via
+# AuthorizationExecuteWithPrivileges instead of opening Installer.app.
+DEPENDENCIES_STAGE_DIR="$ROOT_DIR/Resources/dependencies"
+DEPENDENCIES_DEST_DIR="$RESOURCES_DIR/dependencies"
+if [[ -f "$DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg" ]]; then
+  mkdir -p "$DEPENDENCIES_DEST_DIR"
+  cp "$DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg" "$DEPENDENCIES_DEST_DIR/BlackHole2ch.pkg"
+  echo "Embedded BlackHole2ch.pkg into $DEPENDENCIES_DEST_DIR/"
+else
+  echo "WARNING: $DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg missing — run ./scripts/fetch_blackhole.sh first to embed the audio driver." >&2
+fi
+
 ICON_PATH="$RESOURCES_DIR/AppIcon.icns"
 if [[ -f "$ROOT_DIR/packaging/AppIcon.icns" ]]; then
   cp "$ROOT_DIR/packaging/AppIcon.icns" "$ICON_PATH"

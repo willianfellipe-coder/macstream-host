@@ -22,6 +22,18 @@ public protocol DependencyInstalling {
     func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact?
     func installManagedSunshine() async throws -> DependencyInstallResult
     func downloadAndOpenBlackHoleInstaller() async throws -> DependencyInstallResult
+
+    /// Returns the URL of the BlackHole .pkg embedded inside the MacStream
+    /// Host bundle, or nil when the app bundle wasn't built with the .pkg
+    /// staged (e.g. dev builds running outside an .app, or builds where
+    /// `./scripts/fetch_blackhole.sh` wasn't run).
+    func embeddedBlackHoleInstallerURL() -> URL?
+
+    /// Installs the embedded BlackHole .pkg via AuthorizationExecuteWithPrivileges.
+    /// One macOS admin password prompt, no Installer.app window. Falls
+    /// back to `downloadAndOpenBlackHoleInstaller` when no embedded .pkg
+    /// is present.
+    func installEmbeddedBlackHole() async throws -> DependencyInstallResult
 }
 
 public protocol PermissionManaging {

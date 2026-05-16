@@ -885,14 +885,23 @@ public final class AppState: ObservableObject {
     }
 
     public func installBlackHole() async {
+        let hasEmbeddedPkg = dependencyInstallerManager.embeddedBlackHoleInstallerURL() != nil
+        let stageDetail = hasEmbeddedPkg
+            ? "Instalando roteamento de áudio do MacStream. Será solicitada uma senha de administrador."
+            : "Baixando driver oficial de roteamento de áudio."
         dependencyInstallProgress = DependencyInstallProgress(
             id: .blackHole,
             stage: .downloading,
-            detail: "Baixando driver oficial de roteamento de áudio."
+            detail: stageDetail
         )
 
         do {
-            let result = try await dependencyInstallerManager.downloadAndOpenBlackHoleInstaller()
+            let result: DependencyInstallResult
+            if hasEmbeddedPkg {
+                result = try await dependencyInstallerManager.installEmbeddedBlackHole()
+            } else {
+                result = try await dependencyInstallerManager.downloadAndOpenBlackHoleInstaller()
+            }
             lastDependencyInstallResult = result
             dependencyInstallProgress = DependencyInstallProgress(
                 id: .blackHole,

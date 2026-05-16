@@ -13,4 +13,5 @@ build/
 *.log
 Resources/sunshine/
 Resources/audio/packages/
+Resources/dependencies/
 screenshots/

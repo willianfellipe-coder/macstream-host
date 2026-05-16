@@ -69,13 +69,25 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
     private let commandRunner: CommandRunning
     private let downloader: DependencyArtifactDownloading
     private let dependenciesDirectory: URL
+    private let privilegedInstallerFactory: () -> PrivilegedInstaller
+    private let embeddedBlackHoleLookup: () -> URL?
+    private let blackHoleDriverPath: String
 
     public init(
         settings: MacStreamHostSettings,
         artifacts: [DependencyArtifact] = DependencyManifest.defaultArtifacts(),
         fileManager: FileManager = .default,
         commandRunner: CommandRunning = ProcessCommandRunner(),
-        downloader: DependencyArtifactDownloading = URLSessionDependencyArtifactDownloader()
+        downloader: DependencyArtifactDownloading = URLSessionDependencyArtifactDownloader(),
+        privilegedInstallerFactory: @escaping () -> PrivilegedInstaller = { PrivilegedInstaller() },
+        embeddedBlackHoleLookup: @escaping () -> URL? = {
+            Bundle.main.url(
+                forResource: "BlackHole2ch",
+                withExtension: "pkg",
+                subdirectory: "dependencies"
+            )
+        },
+        blackHoleDriverPath: String = "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver"
     ) {
         self.settings = settings.normalized()
         self.artifacts = artifacts
@@ -85,6 +97,9 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
         self.dependenciesDirectory = settings.normalized().configDirectoryURL
             .deletingLastPathComponent()
             .appendingPathComponent("Dependencies", isDirectory: true)
+        self.privilegedInstallerFactory = privilegedInstallerFactory
+        self.embeddedBlackHoleLookup = embeddedBlackHoleLookup
+        self.blackHoleDriverPath = blackHoleDriverPath
     }
 
     public func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact? {
@@ -163,6 +178,57 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
             downloadedPath: downloadedURL.path,
             requiresUserCompletion: true,
             message: "Instalador do BlackHole aberto. Conclua a instalação no Installer.app e reinicie se solicitado."
+        )
+    }
+
+    public func embeddedBlackHoleInstallerURL() -> URL? {
+        guard let url = embeddedBlackHoleLookup() else { return nil }
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    public func installEmbeddedBlackHole() async throws -> DependencyInstallResult {
+        let artifact = try requiredArtifact(.blackHole)
+
+        // If the driver is already installed at the expected HAL plugin
+        // path, skip the privileged install entirely. The CoreAudio device
+        // shows up once the daemon notices the bundle.
+        if fileManager.fileExists(atPath: blackHoleDriverPath) {
+            return DependencyInstallResult(
+                dependencyID: .blackHole,
+                artifact: artifact,
+                downloadedPath: blackHoleDriverPath,
+                installedPath: blackHoleDriverPath,
+                installedBinaryPath: nil,
+                requiresUserCompletion: false,
+                message: "Roteamento de áudio já está instalado em \(blackHoleDriverPath)."
+            )
+        }
+
+        // No embedded .pkg means the app was built without
+        // ./scripts/fetch_blackhole.sh having staged the artifact. Fall
+        // back to the legacy download + Installer.app flow so the user
+        // doesn't get stuck.
+        guard let embeddedURL = embeddedBlackHoleInstallerURL() else {
+            return try await downloadAndOpenBlackHoleInstaller()
+        }
+
+        let installer = privilegedInstallerFactory()
+        do {
+            _ = try installer.installPackage(at: embeddedURL)
+        } catch {
+            throw DependencyInstallerError.commandFailed(
+                "Não foi possível instalar o roteamento de áudio embarcado: \(error.localizedDescription)"
+            )
+        }
+
+        return DependencyInstallResult(
+            dependencyID: .blackHole,
+            artifact: artifact,
+            downloadedPath: embeddedURL.path,
+            installedPath: blackHoleDriverPath,
+            installedBinaryPath: nil,
+            requiresUserCompletion: false,
+            message: "Roteamento de áudio do MacStream instalado. O dispositivo aparece em alguns segundos no CoreAudio."
         )
     }
 
