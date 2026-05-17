@@ -235,6 +235,7 @@ final class SunshineManagerTests: XCTestCase {
     func testStartLaunchesAndSavesOwnedProcess() async throws {
         let store = FakeSunshineOwnershipStore()
         let launcher = FakeSunshineProcessLauncher(processID: 456)
+        let identityRoot = try makeTemporaryDirectory()
         let manager = DefaultSunshineManager(
             binaryResolver: FakeSunshineBinaryResolver(binaryURL: URL(fileURLWithPath: "/tmp/sunshine")),
             processInspector: FakeSunshineProcessInspector(isRunning: false),
@@ -242,6 +243,10 @@ final class SunshineManagerTests: XCTestCase {
             ownershipStore: store,
             processLauncher: launcher,
             processSignaler: FakeSunshineProcessSignaler(isRunning: false, matchesOwnership: false),
+            identityStore: DefaultSunshineIdentityStore(
+                macStreamIdentityURL: identityRoot.appendingPathComponent("identity.json"),
+                sunshineStateURL: identityRoot.appendingPathComponent("sunshine_state.json")
+            ),
             logDirectoryURL: try makeTemporaryDirectory()
         )
 

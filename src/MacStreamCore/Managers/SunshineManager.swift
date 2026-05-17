@@ -94,6 +94,7 @@ public final class DefaultSunshineManager: SunshineManaging {
     private let processLauncher: SunshineProcessLaunching
     private let processSignaler: SunshineProcessSignaling
     private let urlOpener: URLOpening
+    private let identityStore: SunshineIdentityStoring
     private let logDirectoryURL: URL
     private let fileManager: FileManager
 
@@ -106,6 +107,7 @@ public final class DefaultSunshineManager: SunshineManaging {
         processLauncher: SunshineProcessLaunching = ProcessSunshineLauncher(),
         processSignaler: SunshineProcessSignaling = SystemSunshineProcessSignaler(),
         urlOpener: URLOpening = SystemURLOpener(),
+        identityStore: SunshineIdentityStoring = DefaultSunshineIdentityStore(),
         logDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/MacStreamHost"),
         fileManager: FileManager = .default
@@ -118,6 +120,7 @@ public final class DefaultSunshineManager: SunshineManaging {
         self.processLauncher = processLauncher
         self.processSignaler = processSignaler
         self.urlOpener = urlOpener
+        self.identityStore = identityStore
         self.logDirectoryURL = logDirectoryURL
         self.fileManager = fileManager
     }
@@ -180,12 +183,31 @@ public final class DefaultSunshineManager: SunshineManaging {
             try ownershipStore.clear()
         }
 
+        // Adopt an already-running engine that points at our config file
+        // before refusing or spawning a duplicate. The agent's
+        // supervision loop and the user's "start" command can both call
+        // `start()` within a few hundred milliseconds of each other; the
+        // first wins the spawn race AND writes ownership, while the
+        // second used to fail to detect it (the inspector used to only
+        // grep for the literal name `sunshine`) and try to spawn a
+        // second engine that immediately died binding RTSP :48010.
+        if let adopted = try? await adoptRunningEngine(binaryURL: binaryURL) {
+            try ownershipStore.save(adopted)
+            return
+        }
+
         guard await processInspector.isSunshineRunning() == false else {
             throw SunshineManagerError.externalProcessAlreadyRunning
         }
 
         do {
             try fileManager.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+            // Materialize the stable Sunshine identity (sunshine_state.json
+            // with our persisted `uniqueid`) BEFORE the engine reads it.
+            // Without this Sunshine invents a new UUID on every fresh boot
+            // and Moonlight starts showing the host twice — once as the
+            // previously-paired ghost and once as a new lock-icon entry.
+            _ = try? identityStore.ensureSunshineIdentity()
             let process = try processLauncher.launch(
                 binaryURL: binaryURL,
                 configURL: configurationManager.sunshineConfigURL,
@@ -197,6 +219,28 @@ public final class DefaultSunshineManager: SunshineManaging {
         } catch {
             throw SunshineManagerError.launchFailed(error.localizedDescription)
         }
+    }
+
+    private func adoptRunningEngine(binaryURL: URL) async throws -> SunshineOwnedProcess? {
+        let configPath = configurationManager.sunshineConfigURL.path
+        let result = await ProcessCommandRunner().run(
+            executablePath: "/usr/bin/pgrep",
+            arguments: ["-f", "MacStreamEngine \(configPath)"],
+            timeout: 2
+        )
+        guard result.exitCode == 0 else { return nil }
+        let pid = result.standardOutput
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            .first
+        guard let pid else { return nil }
+        let candidate = SunshineOwnedProcess(
+            processID: pid,
+            binaryPath: binaryURL.path,
+            configPath: configPath
+        )
+        guard await processSignaler.matchesOwnership(candidate) else { return nil }
+        return candidate
     }
 
     public func stop() async throws {
@@ -496,13 +540,24 @@ public final class PgrepSunshineProcessInspector: SunshineProcessInspecting {
     }
 
     public func isSunshineRunning() async -> Bool {
-        let result = await runner.run(
-            executablePath: "/usr/bin/pgrep",
-            arguments: ["-x", "sunshine"],
-            timeout: 2
-        )
-
-        return result.exitCode == 0
+        // We probe both the upstream binary name (`sunshine`) — for legacy
+        // installs the user may have placed in /opt/homebrew/bin or
+        // /Applications/Sunshine.app — and our renamed helper
+        // (`MacStreamEngine`). Without checking `MacStreamEngine`,
+        // `DefaultSunshineManager.start()` cannot detect a concurrent
+        // engine spawn and two instances race to bind the same RTSP port
+        // (48010), producing the "Couldn't bind RTSP server" fatal.
+        for executable in ["sunshine", "MacStreamEngine"] {
+            let result = await runner.run(
+                executablePath: "/usr/bin/pgrep",
+                arguments: ["-x", executable],
+                timeout: 2
+            )
+            if result.exitCode == 0 {
+                return true
+            }
+        }
+        return false
     }
 }
 
