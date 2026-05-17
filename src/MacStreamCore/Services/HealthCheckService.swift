@@ -82,6 +82,14 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             checks.append(runtimeLogCheck)
         }
 
+        // Accessibility check: if our process isn't AX-trusted, keyboard
+        // and mouse forwarding from Moonlight are silently dropped by
+        // `CGEventPost`. We probe via `AXIsProcessTrusted()` from the GUI
+        // process. Because the GUI and engine share Identifier and
+        // Authority (org.macstream.host / MacStream Local Dev), the
+        // result is representative of what the engine sees.
+        checks.append(accessibilityCheck())
+
         checks.append(contentsOf: [
             HealthCheck(
                 id: .webUI,
@@ -175,6 +183,32 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             return "Consulte os logs do motor de vídeo para identificar a causa."
         default:
             return "Motor de vídeo ainda não foi iniciado pelo MacStream."
+        }
+    }
+
+    private func accessibilityCheck() -> HealthCheck {
+        switch AccessibilityProbe.currentStatus() {
+        case .granted:
+            return HealthCheck(
+                id: .sunshineAccessibility,
+                title: "Acessibilidade (entrada do Moonlight)",
+                status: .pass,
+                detail: "Acessibilidade concedida — teclado e mouse do Moonlight serão injetados."
+            )
+        case .denied:
+            return HealthCheck(
+                id: .sunshineAccessibility,
+                title: "Acessibilidade (entrada do Moonlight)",
+                status: .fail,
+                detail: "Sem Acessibilidade: o motor recebe os eventos do Moonlight mas o macOS descarta silenciosamente. Adicione MacStream Host em Ajustes > Privacidade > Acessibilidade."
+            )
+        case .unknown:
+            return HealthCheck(
+                id: .sunshineAccessibility,
+                title: "Acessibilidade (entrada do Moonlight)",
+                status: .warning,
+                detail: "Não foi possível verificar Acessibilidade automaticamente."
+            )
         }
     }
 

@@ -41,6 +41,24 @@ struct MacStreamCTL {
             await softReset(arguments: commandArguments)
         case "webui":
             await openWebUI(arguments: commandArguments)
+        case "axprobe":
+            // Print `AX_TRUSTED=true|false` and exit 0/1.
+            // Designed to be called by validate-runtime.sh from the same
+            // bundle / identity the engine uses, so the result is
+            // representative of whether keyboard/mouse input from
+            // Moonlight will actually be injected.
+            let result = AccessibilityProbe.currentStatus()
+            switch result {
+            case .granted:
+                print("AX_TRUSTED=true")
+                Foundation.exit(0)
+            case .denied:
+                print("AX_TRUSTED=false")
+                Foundation.exit(1)
+            case .unknown:
+                print("AX_TRUSTED=unknown")
+                Foundation.exit(2)
+            }
         default:
             printHelp()
         }

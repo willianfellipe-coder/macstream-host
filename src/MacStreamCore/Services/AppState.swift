@@ -43,6 +43,31 @@ public final class AppState: ObservableObject {
     /// during an active session; cancelled on dismiss or app teardown.
     private var streamEndWatcher: Task<Void, Never>?
 
+    /// CoreAudio property listener + the task that drains its events into
+    /// `refresh()`. Started by `startLiveMonitors()` and torn down by
+    /// `stopLiveMonitors()`. Lets the dashboard react the moment BlackHole
+    /// finishes installing without the user reopening the app.
+    private let audioDeviceMonitor = AudioDeviceMonitor()
+    private var audioDeviceMonitorTask: Task<Void, Never>?
+
+    /// Foreground refresh loop. Polls `refresh()` while the app window is
+    /// visible so the user sees state changes (engine respawn, BlackHole
+    /// detection, audio routing) without manually pressing Atualizar.
+    private var foregroundRefreshTask: Task<Void, Never>?
+
+    /// Identity store used by the "Resetar pareamentos" action.
+    private let sunshineIdentityStore: SunshineIdentityStoring = DefaultSunshineIdentityStore()
+
+    /// Last result the foreground monitor saw from `AXIsProcessTrusted()`.
+    /// Used by `evaluateAccessibilityRecovery` to detect a `false → true`
+    /// transition (user just granted Accessibility) and automatically
+    /// restart the engine so Sunshine re-evaluates its cached trust.
+    private var lastObservedAccessibilityTrusted: Bool = false
+
+    /// Tracks whether the engine restart has already been proposed for the
+    /// current grant cycle so we don't spam restarts.
+    private var accessibilityRecoveryRestartInFlight: Bool = false
+
     public private(set) var sunshineManager: SunshineManaging
     public private(set) var blackHoleManager: BlackHoleManaging
     public private(set) var dependencyInstallerManager: DependencyInstalling
@@ -325,6 +350,88 @@ public final class AppState: ObservableObject {
         let sunshine = await sunshineManager.status()
         let blackHole = await blackHoleManager.installationStatus()
         dependencyStatuses = await makeDependencyStatuses(sunshine: sunshine, blackHole: blackHole)
+    }
+
+    /// Starts the CoreAudio device listener and the foreground refresh loop.
+    /// Idempotent — safe to call from `.task` modifiers without guarding the
+    /// caller. The audio listener triggers a refresh whenever a device is
+    /// added/removed, which is the natural signal for "BlackHole just
+    /// finished installing" and similar.
+    public func startLiveMonitors(refreshInterval: TimeInterval = 5) {
+        if audioDeviceMonitorTask == nil {
+            audioDeviceMonitor.start()
+            audioDeviceMonitorTask = Task { [weak self] in
+                guard let stream = self?.audioDeviceMonitor.events else { return }
+                for await _ in stream {
+                    await self?.refresh()
+                }
+            }
+        }
+
+        if foregroundRefreshTask == nil {
+            let nanoseconds = UInt64(max(1, refreshInterval) * 1_000_000_000)
+            foregroundRefreshTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                    if Task.isCancelled { break }
+                    await self?.refresh()
+                    await self?.evaluateAccessibilityRecovery()
+                }
+            }
+        }
+
+        // Seed the AX trust observation so the first transition is detected
+        // accurately (otherwise a true → true on first tick would look like
+        // a transition from false).
+        lastObservedAccessibilityTrusted =
+            (AccessibilityProbe.currentStatus() == .granted)
+    }
+
+    public func stopLiveMonitors() {
+        audioDeviceMonitorTask?.cancel()
+        audioDeviceMonitorTask = nil
+        audioDeviceMonitor.stop()
+        foregroundRefreshTask?.cancel()
+        foregroundRefreshTask = nil
+    }
+
+    /// Watches for a `false → true` transition in `AXIsProcessTrusted()` —
+    /// the user just toggled Accessibility on for MacStream Host in System
+    /// Settings. Sunshine caches the trust check at engine startup, so the
+    /// running engine will keep silently dropping CGEventPost until it
+    /// respawns. Auto-restart bridges that gap.
+    private func evaluateAccessibilityRecovery() async {
+        let nowTrusted = (AccessibilityProbe.currentStatus() == .granted)
+        defer { lastObservedAccessibilityTrusted = nowTrusted }
+
+        // We only act on the rising edge AND only when an engine is alive
+        // — otherwise there's nothing to recycle and `restartSunshine()`
+        // would no-op or fail.
+        let justGranted = (lastObservedAccessibilityTrusted == false && nowTrusted)
+        let engineOwned = (dashboard.sunshineStatus.ownedProcessID != nil)
+        guard justGranted, engineOwned, !accessibilityRecoveryRestartInFlight else {
+            return
+        }
+
+        accessibilityRecoveryRestartInFlight = true
+        defer { accessibilityRecoveryRestartInFlight = false }
+
+        lastOperationMessage = "Acessibilidade concedida — reiniciando o motor para aplicar."
+        await restartSunshine()
+    }
+
+    /// Drops any stored Moonlight client certificates from Sunshine's state
+    /// so the iPad starts a clean pairing handshake. Used when the iPad
+    /// shows a duplicate offline "MacStream Host" entry because a previous
+    /// install regenerated certificates.
+    public func resetMoonlightPairings() async {
+        do {
+            try sunshineIdentityStore.resetClientPairings()
+            lastOperationMessage = "Pareamentos Moonlight resetados. Reinicie o motor e pareie novamente pelo iPad."
+        } catch {
+            lastOperationMessage = "Não foi possível resetar pareamentos: \(error.localizedDescription)"
+        }
+        await refresh()
     }
 
     public func runPreflight(startAfterValidation: Bool, overwriteConfig: Bool) async {
@@ -694,6 +801,54 @@ public final class AppState: ObservableObject {
         }
     }
 
+    /// True when the engine's process identity reports `AXIsProcessTrusted=false`.
+    /// Surfaces an in-app banner that explains why keyboard/mouse from
+    /// Moonlight don't reach the Mac (silently dropped CGEventPost) and
+    /// offers a one-click reset + System Settings deep link.
+    public var hasSunshineAccessibilityFailure: Bool {
+        healthCheckResult.checks.contains {
+            $0.id == .sunshineAccessibility && $0.status == .fail
+        }
+    }
+
+    /// Companion to `resetSunshineScreenRecordingGrant`. Clears the
+    /// Accessibility TCC entry for `org.macstream.host` so the user gets a
+    /// clean re-grant, opens the Accessibility pane, then refreshes.
+    /// After re-granting the user should restart the engine so it
+    /// re-evaluates `AXIsProcessTrusted()` (Sunshine caches the result
+    /// at boot). The banner offers that restart as a separate action.
+    public func resetSunshineAccessibilityGrant() async {
+        let bundleIDs = [
+            "org.macstream.host",
+            // Legacy ids — harmless if they don't exist.
+            "macstream-agent",
+            "macstreamctl"
+        ]
+        var combinedExit: Int32 = 0
+        var combinedError = ""
+        for bundleID in bundleIDs {
+            let result = await commandRunner.run(
+                executablePath: "/usr/bin/tccutil",
+                arguments: ["reset", "Accessibility", bundleID],
+                timeout: 5
+            )
+            if result.exitCode != 0 {
+                combinedExit = result.exitCode
+                combinedError = result.standardError
+            }
+        }
+        if combinedExit == 0 {
+            lastOperationMessage = "Permissão de Acessibilidade resetada. Ative MacStream Host na lista e clique em 'Reiniciar motor' para aplicar."
+        } else {
+            let detail = combinedError.isEmpty
+                ? "tccutil retornou código \(combinedExit)."
+                : combinedError
+            lastOperationMessage = "Não foi possível resetar Acessibilidade: \(detail)"
+        }
+        try? await permissionManager.openSettings(for: .accessibility)
+        await refresh()
+    }
+
     public func requestMacOSPermissions() async {
         let permissionsToRequest: [MacPermission] = [
             .screenRecording,
@@ -884,71 +1039,11 @@ public final class AppState: ObservableObject {
         await refresh()
     }
 
-    public func installBlackHole() async {
-        let hasEmbeddedPkg = dependencyInstallerManager.embeddedBlackHoleInstallerURL() != nil
-        let stageDetail = hasEmbeddedPkg
-            ? "Instalando roteamento de áudio do MacStream. Será solicitada uma senha de administrador."
-            : "Baixando driver oficial de roteamento de áudio."
-        dependencyInstallProgress = DependencyInstallProgress(
-            id: .blackHole,
-            stage: .downloading,
-            detail: stageDetail
-        )
-
-        do {
-            let result: DependencyInstallResult
-            if hasEmbeddedPkg {
-                result = try await dependencyInstallerManager.installEmbeddedBlackHole()
-            } else {
-                result = try await dependencyInstallerManager.downloadAndOpenBlackHoleInstaller()
-            }
-            lastDependencyInstallResult = result
-            dependencyInstallProgress = DependencyInstallProgress(
-                id: .blackHole,
-                stage: result.requiresUserCompletion ? .waitingForUser : .completed,
-                detail: result.message
-            )
-            lastOperationMessage = result.message
-        } catch {
-            dependencyInstallProgress = DependencyInstallProgress(
-                id: .blackHole,
-                stage: .failed,
-                detail: error.localizedDescription
-            )
-            lastOperationMessage = error.localizedDescription
-        }
-
-        await refresh()
-    }
-
-    public func pollForBlackHoleInstallation(maxAttempts: Int = 20, intervalSeconds: Double = 3.0) async {
-        for _ in 0..<maxAttempts {
-            await refreshDependencies()
-            if dependencyStatus(for: .blackHole) == .pass {
-                dependencyInstallProgress = DependencyInstallProgress(
-                    id: .blackHole,
-                    stage: .completed,
-                    detail: "Roteamento de áudio detectado."
-                )
-                lastOperationMessage = "Roteamento de áudio detectado."
-                return
-            }
-            try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
-        }
-    }
-
     public func installMissingDependencies() async {
         let sunshine = await sunshineManager.status()
-        let blackHole = await blackHoleManager.installationStatus()
-
         if sunshine.state == .notInstalled {
             await installManagedSunshine()
         }
-
-        if blackHole != .installed {
-            await installBlackHole()
-        }
-
         await refresh()
     }
 
@@ -1037,10 +1132,12 @@ public final class AppState: ObservableObject {
             ),
             DependencyStatus(
                 id: .blackHole,
-                status: blackHole.checkStatus,
-                detail: blackHole == .installed
-                    ? "Roteamento de áudio do MacStream ativo."
-                    : await blackHoleManager.installationGuidance(),
+                // BlackHole is optional now that Sunshine v2026.516+ captures
+                // system audio via the macOS Tap API on 14.2+. When the user
+                // is on native capture, treat "missing" as PASS so the
+                // dashboard doesn't keep nagging — the row stays informational.
+                status: effectiveBlackHoleStatus(blackHole),
+                detail: blackHoleDetail(blackHole),
                 officialURL: URL(string: "https://github.com/ExistentialAudio/BlackHole")
             ),
             DependencyStatus(
@@ -1050,6 +1147,29 @@ public final class AppState: ObservableObject {
                 officialURL: URL(string: "https://moonlight-stream.org")
             )
         ]
+    }
+
+    private func effectiveBlackHoleStatus(_ blackHole: BlackHoleInstallationStatus) -> CheckStatus {
+        if runtimeSettings.audioCaptureMode == .blackHole2ch {
+            return blackHole.checkStatus
+        }
+        // Native macOS Tap API capture handles audio without BlackHole.
+        // Surface the driver as a passing optional component so the
+        // dashboard isn't yellow forever on a perfectly healthy install.
+        return .pass
+    }
+
+    private func blackHoleDetail(_ blackHole: BlackHoleInstallationStatus) -> String {
+        switch (runtimeSettings.audioCaptureMode, blackHole) {
+        case (.blackHole2ch, .installed):
+            return "Roteamento de áudio do MacStream ativo."
+        case (.blackHole2ch, _):
+            return "Modo de captura selecionado precisa do driver BlackHole 2ch — clique em Configurar roteamento de áudio."
+        case (_, .installed):
+            return "Driver disponível como fallback. Captura nativa do macOS está em uso."
+        default:
+            return "Captura nativa do macOS em uso. O driver é opcional para quem precisar de um Multi-Output Device."
+        }
     }
 
     private func determineOperationalState(
@@ -1188,14 +1308,16 @@ public final class AppState: ObservableObject {
             SetupChecklistItem(
                 id: .blackHoleInstalled,
                 title: "Verificar roteamento de áudio",
-                status: blackHole.checkStatus,
-                detail: "Roteamento de áudio é o fallback oficial; captura nativa precisa de validação."
+                status: effectiveBlackHoleStatus(blackHole),
+                detail: runtimeSettings.audioCaptureMode == .blackHole2ch
+                    ? "Roteamento dedicado selecionado: requer o driver BlackHole 2ch."
+                    : "Captura nativa do macOS em uso; o driver é opcional para Multi-Output Device."
             ),
             SetupChecklistItem(
                 id: .audioConfiguration,
                 title: "Verificar configuração de áudio",
-                status: blackHole == .installed ? .pass : .warning,
-                detail: "Selecionar captura nativa ou roteamento dedicado após testes reais."
+                status: effectiveBlackHoleStatus(blackHole),
+                detail: "Modo de captura: \(runtimeSettings.audioCaptureMode.displayName)."
             ),
             SetupChecklistItem(
                 id: .networkPorts,
