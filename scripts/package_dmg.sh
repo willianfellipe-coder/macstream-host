@@ -112,17 +112,10 @@ if [[ -f "$SUNSHINE_STAGE_DIR/LICENSE" ]]; then
   cp "$SUNSHINE_STAGE_DIR/LICENSE" "$RESOURCES_DIR/LICENSE-engine"
 fi
 
-# Embed BlackHole 2ch .pkg so DependencyInstallerManager can install via
-# AuthorizationExecuteWithPrivileges instead of opening Installer.app.
-DEPENDENCIES_STAGE_DIR="$ROOT_DIR/Resources/dependencies"
-DEPENDENCIES_DEST_DIR="$RESOURCES_DIR/dependencies"
-if [[ -f "$DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg" ]]; then
-  mkdir -p "$DEPENDENCIES_DEST_DIR"
-  cp "$DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg" "$DEPENDENCIES_DEST_DIR/BlackHole2ch.pkg"
-  echo "Embedded BlackHole2ch.pkg into $DEPENDENCIES_DEST_DIR/"
-else
-  echo "WARNING: $DEPENDENCIES_STAGE_DIR/BlackHole2ch.pkg missing — run ./scripts/fetch_blackhole.sh first to embed the audio driver." >&2
-fi
+# Sunshine v2026.516+ captures system audio via the macOS Tap API on
+# macOS 14.2+, so we no longer bundle BlackHole. Users who want a
+# Multi-Output Device setup can still install the upstream driver from
+# https://github.com/ExistentialAudio/BlackHole separately.
 
 ICON_PATH="$RESOURCES_DIR/AppIcon.icns"
 if [[ -f "$ROOT_DIR/packaging/AppIcon.icns" ]]; then
@@ -270,9 +263,25 @@ if [[ -n "${DEVELOPER_ID_APPLICATION:-}" ]]; then
 elif [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   SIGN_IDENTITY="$CODESIGN_IDENTITY"
 else
-  SIGN_IDENTITY="-"
-  echo "WARNING: signing ad-hoc ('-'). Screen Recording grants may be invalidated on each rebuild." >&2
-  echo "         Set CODESIGN_IDENTITY (local) or DEVELOPER_ID_APPLICATION (production) for stable cdhash." >&2
+  # Try to provision (or reuse) the local self-signed identity that survives
+  # rebuilds. Without it, codesign falls back to ad-hoc, the cdhash changes
+  # on every build, and macOS TCC invalidates every Screen Recording /
+  # Accessibility grant. The script is idempotent — it just emits the name
+  # of an identity that already exists when re-run.
+  if SIGN_IDENTITY=$("$ROOT_DIR/scripts/setup_local_codesign_identity.sh" 2>/dev/null \
+       | tail -n 1); then
+    if [[ -z "$SIGN_IDENTITY" ]]; then
+      SIGN_IDENTITY="-"
+    fi
+  else
+    SIGN_IDENTITY="-"
+  fi
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    echo "WARNING: signing ad-hoc ('-'). Screen Recording grants may be invalidated on each rebuild." >&2
+    echo "         Set CODESIGN_IDENTITY (local) or DEVELOPER_ID_APPLICATION (production) for stable cdhash." >&2
+  else
+    echo "Using local self-signed identity for stable TCC: $SIGN_IDENTITY"
+  fi
 fi
 
 echo "Signing with identity: $SIGN_IDENTITY"
@@ -299,7 +308,19 @@ fi
 
 for helper in macstreamctl macstream-agent; do
   if [[ -x "$MACOS_DIR/$helper" ]]; then
-    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS_DIR/$helper" >/dev/null
+    # Same `--identifier "org.macstream.host"` treatment as MacStreamEngine.
+    # Without it codesign falls back to the binary's basename, making each
+    # helper a separate TCC subject. With `responsibility_spawnattrs_setdisclaim`
+    # in play, the engine's Accessibility check is attributed to the
+    # responsible process (the agent) — so the agent MUST share the parent's
+    # identifier for a single Accessibility grant on MacStream Host.app to
+    # actually cover the entire helper chain. Without this fix, keyboard
+    # and mouse forwarding from Moonlight is silently dropped.
+    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
+      --identifier "org.macstream.host" \
+      --options runtime \
+      --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
+      "$MACOS_DIR/$helper" >/dev/null
   fi
 done
 

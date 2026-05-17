@@ -1,11 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import MacStreamCore
 import SwiftUI
+
+/// AppDelegate that pins activation policy to `.regular` (dock icon + window
+/// + menu bar item) and force-activates on launch + on re-open. Without this
+/// the combination of `MenuBarExtra` + macOS quit-and-reopen (which fires
+/// after every TCC permission toggle) leaves SwiftUI in a state where the
+/// main window stays alive but never comes to the foreground — the user sees
+/// "the app didn't open" because System Settings is in front and the window
+/// stays on whichever Space it was last on.
+final class MacStreamAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            for window in sender.windows where window.canBecomeMain {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+        sender.activate(ignoringOtherApps: true)
+        return true
+    }
+}
 
 @main
 @MainActor
 struct MacStreamHostApp: App {
+    @NSApplicationDelegateAdaptor(MacStreamAppDelegate.self) private var appDelegate
     @StateObject private var appState: AppState
     @State private var privacyOverlayController: PrivacyOverlayController?
 
@@ -19,6 +45,7 @@ struct MacStreamHostApp: App {
                 .environmentObject(appState)
                 .task {
                     await appState.refresh()
+                    appState.startLiveMonitors()
                 }
                 .onAppear {
                     if privacyOverlayController == nil {

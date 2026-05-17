@@ -1,55 +1,51 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# ⚠ STATUS: WORK IN PROGRESS — see "Known bug" below before relying on this.
-#
 # Creates a persistent self-signed code signing identity named "MacStream
 # Local Dev" in the developer's login keychain. Subsequent package_dmg.sh
-# runs use this identity to produce a stable cdhash across rebuilds, so a
-# Screen Recording grant survives every `swift build`.
+# runs sign all binaries with the same identity, producing a stable
+# designated requirement so Screen Recording / Accessibility / Microphone
+# grants survive every `swift build` cycle.
 #
-# Known bug (as of 2026-05-14, macOS 26.5.0 Tahoe):
-#   `security import` of the PKCS#12 produced here imports the certificate
-#   but does not pair it with the private key, so `security find-identity
-#   -v -p codesigning` returns 0 entries afterwards even though the cert is
-#   visible via `security find-certificate -c "MacStream Local Dev"`. Tried
-#   several PKCS#12 variants (-legacy, -keypbe PBE-SHA1-3DES, -macalg sha1,
-#   -iter 2048) — all the same outcome. The next iteration will likely
-#   bypass PKCS#12 entirely and use the Swift Security framework
-#   (SecKeyCreateRandomKey + a hand-rolled cert via swift-certificates +
-#   SecItemAdd) so the keypair is born inside the keychain.
+# Why this is needed: ad-hoc signing (`codesign --sign -`) generates a fresh
+# cdhash on every rebuild. macOS TCC keys those grants by cdhash, so the
+# user has to re-add MacStream Host + MacStreamEngine + macstream-agent to
+# System Settings after every package_dmg.sh. With a real self-signed cert,
+# the leaf cert hash stays constant across rebuilds even when the binary
+# content changes — TCC stores the requirement once and keeps honoring it.
 #
-# Until that lands, package_dmg.sh falls back to ad-hoc signing and the
-# user must re-grant Screen Recording / Accessibility after every rebuild.
+# Implementation notes:
 #
-# Without this:
-#   - codesign falls back to ad-hoc (`-`).
-#   - Each rebuild gets a new cdhash.
-#   - TCC keys Screen Recording grants by cdhash for ad-hoc apps.
-#   - User has to re-grant permission every build cycle.
+# 1. Generate RSA 2048 key + self-signed X.509 cert with codeSigning EKU
+#    via OpenSSL 3 (Homebrew).
+# 2. Import the private key into the login keychain as DER-encoded PKCS#8.
+#    (`security import` rejects PEM PKCS#8 with "Unknown format in import";
+#    rejects PKCS#12 bundles wholesale with "MAC verification failed"; only
+#    accepts the raw DER form.)
+# 3. Import the certificate separately.
+# 4. Update the partition list so /usr/bin/codesign can use the key without
+#    prompting on first use.
 #
-# With this:
-#   - Both MacStream Host and MacStreamEngine sign with the same identity.
-#   - The "designated requirement" stored by TCC becomes anchor-based instead
-#     of cdhash-based, so it survives binary changes that don't affect the
-#     cert chain.
-#   - One grant covers both binaries inside the bundle (same identifier +
-#     same anchor cert).
+# Verification gotcha: `security find-identity -v -p codesigning` only lists
+# identities chained to roots Apple already trusts for code signing. Our
+# self-signed cert won't show there even when fully functional. We verify
+# by attempting a real signing operation against a throwaway binary, which
+# is the only test that matches what package_dmg.sh actually does.
 #
-# Idempotent. Safe to re-run. Prints the identity name on stdout when done.
+# Idempotent. Safe to re-run. Emits the identity name on stdout when done.
 #
 # Usage:
 #   ./scripts/setup_local_codesign_identity.sh
 #   IDENTITY=$(./scripts/setup_local_codesign_identity.sh) ./scripts/package_dmg.sh
+#   # OR: package_dmg.sh autoresolves the identity if it's already in the keychain
 
 set -euo pipefail
 
 IDENTITY_NAME="MacStream Local Dev"
 KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 
-# macOS ships LibreSSL whose PKCS#12 exports use a MAC algorithm the Keychain
-# tools no longer accept (PBKDF2-HMAC-SHA256). Prefer OpenSSL 3 from Homebrew
-# (or wherever it lives) which has `-legacy` to produce a compatible bundle.
+# Locate an OpenSSL 3 install — macOS ships LibreSSL which uses incompatible
+# PKCS#8 defaults and refuses some of the legacy options we need.
 OPENSSL_CMD=""
 for candidate in /opt/homebrew/bin/openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/bin/openssl; do
   if [[ -x "$candidate" ]] && "$candidate" version 2>/dev/null | grep -q "OpenSSL 3"; then
@@ -58,27 +54,46 @@ for candidate in /opt/homebrew/bin/openssl /opt/homebrew/opt/openssl@3/bin/opens
   fi
 done
 if [[ -z "$OPENSSL_CMD" ]]; then
-  echo "ERROR: OpenSSL 3 is required for PKCS#12 export compatible with macOS Keychain." >&2
-  echo "Install Homebrew OpenSSL: brew install openssl@3" >&2
+  echo "ERROR: OpenSSL 3 is required. Install with: brew install openssl@3" >&2
   exit 2
 fi
 
-if ! /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
-    | grep -q "$IDENTITY_NAME"; then
+# grep -q matches early and closes the upstream pipe, which under `set -o
+# pipefail` makes `codesign -dvv | grep -q ...` return SIGPIPE (141) even
+# on a successful match. Capture the verify output first and grep against
+# the buffer to keep pipefail honest.
+verify_signed_with_identity() {
+  local bin="$1"
+  local output
+  output="$(/usr/bin/codesign -dvv "$bin" 2>&1)"
+  [[ "$output" == *"Authority=$IDENTITY_NAME"* ]]
+}
 
-  echo "Creating self-signed code signing identity: $IDENTITY_NAME" >&2
-  echo "Using $OPENSSL_CMD" >&2
+# Probe: can codesign already sign with this identity? If yes, we're done.
+PROBE_DIR="$(mktemp -d)"
+trap 'rm -rf "$PROBE_DIR"' EXIT
+PROBE_BIN="$PROBE_DIR/probe"
+printf '#!/bin/sh\nexit 0\n' > "$PROBE_BIN"
+chmod +x "$PROBE_BIN"
 
-  WORK_DIR="$(mktemp -d)"
-  trap 'rm -rf "$WORK_DIR"' EXIT
+if /usr/bin/codesign --force --sign "$IDENTITY_NAME" "$PROBE_BIN" 2>/dev/null \
+   && verify_signed_with_identity "$PROBE_BIN"; then
+  echo "Identity '$IDENTITY_NAME' already usable for codesigning." >&2
+  echo "$IDENTITY_NAME"
+  exit 0
+fi
 
-  "$OPENSSL_CMD" genrsa -out "$WORK_DIR/key.pem" 2048 2>/dev/null
+echo "Creating self-signed code signing identity: $IDENTITY_NAME" >&2
+echo "Using $OPENSSL_CMD" >&2
 
-  # X.509 extension profile required by macOS for code signing certificates:
-  #   - basicConstraints: not a CA
-  #   - keyUsage: digitalSignature
-  #   - extendedKeyUsage: 1.3.6.1.5.5.7.3.3 (codeSigning)
-  cat > "$WORK_DIR/ext.cnf" <<EOF
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$PROBE_DIR" "$WORK_DIR"' EXIT
+
+# 1. Generate RSA 2048 private key
+"$OPENSSL_CMD" genrsa -out "$WORK_DIR/key.pem" 2048 2>/dev/null
+
+# 2. Generate self-signed cert with codeSigning EKU
+cat > "$WORK_DIR/ext.cnf" <<EOF
 [ req ]
 distinguished_name = dn
 prompt = no
@@ -91,64 +106,60 @@ keyUsage = critical, digitalSignature
 extendedKeyUsage = critical, codeSigning
 EOF
 
-  "$OPENSSL_CMD" req -new -x509 \
-    -key "$WORK_DIR/key.pem" \
-    -out "$WORK_DIR/cert.pem" \
-    -days 3650 \
-    -config "$WORK_DIR/ext.cnf" \
-    -extensions ext \
-    2>/dev/null
+"$OPENSSL_CMD" req -new -x509 \
+  -key "$WORK_DIR/key.pem" \
+  -out "$WORK_DIR/cert.pem" \
+  -days 3650 \
+  -config "$WORK_DIR/ext.cnf" \
+  -extensions ext \
+  2>/dev/null
 
-  # Force every PKCS12 layer to algorithms that macOS Keychain accepts:
-  #   - keypbe / certpbe: PBE-SHA1-3DES (legacy PKCS12 encryption)
-  #   - macalg: SHA1 (legacy MAC, what macOS verifies)
-  #   - iter: 2048 (Apple's minimum)
-  # Without `-legacy` AND explicit `-macalg sha1`, OpenSSL 3 still writes a
-  # PBMAC1 (PBKDF2-SHA256) header that macOS rejects with "MAC verification
-  # failed".
-  P12_PASSWORD="macstream-local-dev"
-  "$OPENSSL_CMD" pkcs12 -export \
-    -inkey "$WORK_DIR/key.pem" \
-    -in "$WORK_DIR/cert.pem" \
-    -name "$IDENTITY_NAME" \
-    -out "$WORK_DIR/identity.p12" \
-    -passout "pass:$P12_PASSWORD" \
-    -keypbe PBE-SHA1-3DES \
-    -certpbe PBE-SHA1-3DES \
-    -macalg sha1 \
-    -iter 2048 \
-    -legacy
+# 3. Convert key to DER PKCS#8 (security only accepts this for -t priv)
+"$OPENSSL_CMD" pkcs8 -topk8 -inform PEM -outform DER \
+  -in "$WORK_DIR/key.pem" \
+  -out "$WORK_DIR/key.p8.der" \
+  -nocrypt 2>/dev/null
 
-  /usr/bin/security import "$WORK_DIR/identity.p12" \
-    -k "$KEYCHAIN" \
-    -P "$P12_PASSWORD" \
-    -A \
-    -T /usr/bin/codesign \
-    -T /usr/bin/security \
-    >/dev/null
+# 4. Clean any prior incomplete state (best-effort)
+/usr/bin/security delete-certificate -c "$IDENTITY_NAME" >/dev/null 2>&1 || true
 
-  # `import -A` allows any app to access the key, but on macOS 10.12+ the
-  # Keychain partition list still gates access on first use with a GUI prompt
-  # — even when the key is supposed to be open. Updating the partition list
-  # explicitly lets codesign use it non-interactively.
-  /usr/bin/security set-key-partition-list \
-    -S apple-tool:,apple:,codesign: \
-    -s \
-    -k "" \
-    "$KEYCHAIN" \
-    >/dev/null 2>&1 || true
+# 5. Import private key
+/usr/bin/security import "$WORK_DIR/key.p8.der" \
+  -k "$KEYCHAIN" \
+  -t priv \
+  -A \
+  -T /usr/bin/codesign \
+  -T /usr/bin/security \
+  >/dev/null
 
-  echo "Identity '$IDENTITY_NAME' imported into login keychain." >&2
+# 6. Import certificate
+/usr/bin/security import "$WORK_DIR/cert.pem" \
+  -k "$KEYCHAIN" \
+  -t cert \
+  -A \
+  -T /usr/bin/codesign \
+  -T /usr/bin/security \
+  >/dev/null
+
+# 7. Open partition list so codesign can use the key non-interactively
+/usr/bin/security set-key-partition-list \
+  -S apple-tool:,apple:,codesign: \
+  -s \
+  -k "" \
+  "$KEYCHAIN" \
+  >/dev/null 2>&1 || true
+
+# 8. Functional verification: actually sign a throwaway binary.
+SIGN_OUTPUT=$(/usr/bin/codesign --force --sign "$IDENTITY_NAME" "$PROBE_BIN" 2>&1) || {
+  echo "ERROR: codesign refused to use '$IDENTITY_NAME':" >&2
+  echo "$SIGN_OUTPUT" >&2
+  exit 1
+}
+if verify_signed_with_identity "$PROBE_BIN"; then
+  echo "Identity '$IDENTITY_NAME' imported and verified by signing a test binary." >&2
+  echo "$IDENTITY_NAME"
 else
-  echo "Identity '$IDENTITY_NAME' already exists in login keychain." >&2
-fi
-
-# Verify it works for code signing
-if ! /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null \
-    | grep -q "$IDENTITY_NAME"; then
-  echo "ERROR: '$IDENTITY_NAME' is not usable for codesigning. Check Keychain Access." >&2
+  echo "ERROR: signed with '$IDENTITY_NAME' but Authority line is missing:" >&2
+  /usr/bin/codesign -dvv "$PROBE_BIN" >&2 2>&1
   exit 1
 fi
-
-# Emit the identity name on stdout so callers can capture it.
-echo "$IDENTITY_NAME"
