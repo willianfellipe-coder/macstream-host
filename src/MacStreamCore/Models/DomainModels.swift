@@ -856,7 +856,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         agentExecutablePath: String? = nil,
         configDirectoryPath: String,
         logDirectoryPath: String,
-        audioCaptureMode: AudioCaptureMode = .blackHole2ch,
+        audioCaptureMode: AudioCaptureMode = .nativeSystemAudio,
         powerPolicy: PowerPolicy = .defaults,
         hostPrivacyPolicy: HostPrivacyPolicy = .defaults,
         appPasswordPolicy: AppPasswordPolicy = .defaults,
@@ -894,7 +894,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
             ?? defaults.configDirectoryPath
         logDirectoryPath = try container.decodeIfPresent(String.self, forKey: .logDirectoryPath)
             ?? defaults.logDirectoryPath
-        audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .blackHole2ch
+        audioCaptureMode = try container.decodeIfPresent(AudioCaptureMode.self, forKey: .audioCaptureMode) ?? .nativeSystemAudio
         powerPolicy = try container.decodeIfPresent(PowerPolicy.self, forKey: .powerPolicy) ?? .defaults
         hostPrivacyPolicy = try container.decodeIfPresent(HostPrivacyPolicy.self, forKey: .hostPrivacyPolicy) ?? .defaults
         appPasswordPolicy = try container.decodeIfPresent(AppPasswordPolicy.self, forKey: .appPasswordPolicy) ?? .defaults
@@ -912,7 +912,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
             logDirectoryPath: home
                 .appendingPathComponent("Library/Logs/MacStreamHost")
                 .path,
-            audioCaptureMode: .blackHole2ch,
+            audioCaptureMode: .nativeSystemAudio,
             powerPolicy: .defaults,
             hostPrivacyPolicy: .defaults
         )
@@ -963,7 +963,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
             agentExecutablePath: agentExecutablePath?.isEmpty == true ? nil : agentExecutablePath,
             configDirectoryPath: (configDirectoryPath as NSString).expandingTildeInPath,
             logDirectoryPath: (logDirectoryPath as NSString).expandingTildeInPath,
-            audioCaptureMode: audioCaptureMode == .unknown ? .blackHole2ch : audioCaptureMode,
+            audioCaptureMode: audioCaptureMode == .unknown ? .nativeSystemAudio : audioCaptureMode,
             powerPolicy: powerPolicy,
             hostPrivacyPolicy: hostPrivacyPolicy
         )
@@ -1231,6 +1231,7 @@ public enum HealthCheckID: String, Codable, Hashable, CaseIterable {
     case sunshine
     case sunshineRuntime
     case sunshineScreenRecording
+    case sunshineAccessibility
     case webUI
     case blackHole
     case permissions

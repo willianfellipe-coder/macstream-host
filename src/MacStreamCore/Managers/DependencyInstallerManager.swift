@@ -69,25 +69,13 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
     private let commandRunner: CommandRunning
     private let downloader: DependencyArtifactDownloading
     private let dependenciesDirectory: URL
-    private let privilegedInstallerFactory: () -> PrivilegedInstaller
-    private let embeddedBlackHoleLookup: () -> URL?
-    private let blackHoleDriverPath: String
 
     public init(
         settings: MacStreamHostSettings,
         artifacts: [DependencyArtifact] = DependencyManifest.defaultArtifacts(),
         fileManager: FileManager = .default,
         commandRunner: CommandRunning = ProcessCommandRunner(),
-        downloader: DependencyArtifactDownloading = URLSessionDependencyArtifactDownloader(),
-        privilegedInstallerFactory: @escaping () -> PrivilegedInstaller = { PrivilegedInstaller() },
-        embeddedBlackHoleLookup: @escaping () -> URL? = {
-            Bundle.main.url(
-                forResource: "BlackHole2ch",
-                withExtension: "pkg",
-                subdirectory: "dependencies"
-            )
-        },
-        blackHoleDriverPath: String = "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver"
+        downloader: DependencyArtifactDownloading = URLSessionDependencyArtifactDownloader()
     ) {
         self.settings = settings.normalized()
         self.artifacts = artifacts
@@ -97,9 +85,6 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
         self.dependenciesDirectory = settings.normalized().configDirectoryURL
             .deletingLastPathComponent()
             .appendingPathComponent("Dependencies", isDirectory: true)
-        self.privilegedInstallerFactory = privilegedInstallerFactory
-        self.embeddedBlackHoleLookup = embeddedBlackHoleLookup
-        self.blackHoleDriverPath = blackHoleDriverPath
     }
 
     public func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact? {
@@ -156,80 +141,6 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
             _ = await detachVolume(at: mountURL)
             throw error
         }
-    }
-
-    public func downloadAndOpenBlackHoleInstaller() async throws -> DependencyInstallResult {
-        let artifact = try requiredArtifact(.blackHole)
-        let downloadedURL = try await downloadAndVerify(artifact)
-
-        let openResult = await commandRunner.run(
-            executablePath: "/usr/bin/open",
-            arguments: [downloadedURL.path],
-            timeout: 30
-        )
-
-        guard openResult.exitCode == 0 else {
-            throw DependencyInstallerError.commandFailed(openResult.standardError)
-        }
-
-        return DependencyInstallResult(
-            dependencyID: .blackHole,
-            artifact: artifact,
-            downloadedPath: downloadedURL.path,
-            requiresUserCompletion: true,
-            message: "Instalador do BlackHole aberto. Conclua a instalação no Installer.app e reinicie se solicitado."
-        )
-    }
-
-    public func embeddedBlackHoleInstallerURL() -> URL? {
-        guard let url = embeddedBlackHoleLookup() else { return nil }
-        return fileManager.fileExists(atPath: url.path) ? url : nil
-    }
-
-    public func installEmbeddedBlackHole() async throws -> DependencyInstallResult {
-        let artifact = try requiredArtifact(.blackHole)
-
-        // If the driver is already installed at the expected HAL plugin
-        // path, skip the privileged install entirely. The CoreAudio device
-        // shows up once the daemon notices the bundle.
-        if fileManager.fileExists(atPath: blackHoleDriverPath) {
-            return DependencyInstallResult(
-                dependencyID: .blackHole,
-                artifact: artifact,
-                downloadedPath: blackHoleDriverPath,
-                installedPath: blackHoleDriverPath,
-                installedBinaryPath: nil,
-                requiresUserCompletion: false,
-                message: "Roteamento de áudio já está instalado em \(blackHoleDriverPath)."
-            )
-        }
-
-        // No embedded .pkg means the app was built without
-        // ./scripts/fetch_blackhole.sh having staged the artifact. Fall
-        // back to the legacy download + Installer.app flow so the user
-        // doesn't get stuck.
-        guard let embeddedURL = embeddedBlackHoleInstallerURL() else {
-            return try await downloadAndOpenBlackHoleInstaller()
-        }
-
-        let installer = privilegedInstallerFactory()
-        do {
-            _ = try installer.installPackage(at: embeddedURL)
-        } catch {
-            throw DependencyInstallerError.commandFailed(
-                "Não foi possível instalar o roteamento de áudio embarcado: \(error.localizedDescription)"
-            )
-        }
-
-        return DependencyInstallResult(
-            dependencyID: .blackHole,
-            artifact: artifact,
-            downloadedPath: embeddedURL.path,
-            installedPath: blackHoleDriverPath,
-            installedBinaryPath: nil,
-            requiresUserCompletion: false,
-            message: "Roteamento de áudio do MacStream instalado. O dispositivo aparece em alguns segundos no CoreAudio."
-        )
     }
 
     private func requiredArtifact(_ dependencyID: ManagedDependencyID) throws -> DependencyArtifact {
@@ -311,8 +222,7 @@ public final class DefaultDependencyInstallerManager: DependencyInstalling {
 public enum DependencyManifest {
     public static func defaultArtifacts(architecture: String = currentArchitecture()) -> [DependencyArtifact] {
         [
-            sunshineArtifact(architecture: architecture),
-            blackHoleArtifact()
+            sunshineArtifact(architecture: architecture)
         ].compactMap { $0 }
     }
 
@@ -322,49 +232,33 @@ public enum DependencyManifest {
             return DependencyArtifact(
                 id: .sunshine,
                 displayName: "Sunshine macOS arm64",
-                version: "v2026.508.45922",
-                downloadURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/download/v2026.508.45922/Sunshine-macOS-arm64.dmg")!,
-                sourceURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/tag/v2026.508.45922")!,
-                sha256: "8b9819f2dafcfa430b00cc08b07aa61d0ad138998d68f369bfc210e07db3eb4b",
-                fileName: "Sunshine-macOS-arm64-v2026.508.45922.dmg",
+                version: "v2026.516.143833",
+                downloadURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/download/v2026.516.143833/Sunshine-macOS-arm64.dmg")!,
+                sourceURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/tag/v2026.516.143833")!,
+                sha256: "ab31ad716117b913c6aab104268e820595c0baf89b319fd3b75d34c9ae8ddd1e",
+                fileName: "Sunshine-macOS-arm64-v2026.516.143833.dmg",
                 installerKind: .macOSDMGApplication,
                 requiresAdministrator: false,
                 requiresReboot: false,
-                isPrerelease: true
+                isPrerelease: false
             )
         case "x86_64":
             return DependencyArtifact(
                 id: .sunshine,
                 displayName: "Sunshine macOS x86_64",
-                version: "v2026.508.45922",
-                downloadURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/download/v2026.508.45922/Sunshine-macOS-x86_64.dmg")!,
-                sourceURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/tag/v2026.508.45922")!,
-                sha256: "8d1518ef938e42d04fd013057aabdf2945d6a6dd12f053943d4d47f68d17089d",
-                fileName: "Sunshine-macOS-x86_64-v2026.508.45922.dmg",
+                version: "v2026.516.143833",
+                downloadURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/download/v2026.516.143833/Sunshine-macOS-x86_64.dmg")!,
+                sourceURL: URL(string: "https://github.com/LizardByte/Sunshine/releases/tag/v2026.516.143833")!,
+                sha256: "6b17c8d5a20cb2d2fa7c3bb9387d1412e63bb5c964d6820af91dea12f31a665f",
+                fileName: "Sunshine-macOS-x86_64-v2026.516.143833.dmg",
                 installerKind: .macOSDMGApplication,
                 requiresAdministrator: false,
                 requiresReboot: false,
-                isPrerelease: true
+                isPrerelease: false
             )
         default:
             return nil
         }
-    }
-
-    public static func blackHoleArtifact() -> DependencyArtifact {
-        DependencyArtifact(
-            id: .blackHole,
-            displayName: "BlackHole 2ch",
-            version: "0.6.1",
-            downloadURL: URL(string: "https://existential.audio/downloads/BlackHole2ch-0.6.1.pkg")!,
-            sourceURL: URL(string: "https://github.com/ExistentialAudio/BlackHole/releases/tag/v0.6.1")!,
-            sha256: "c829afa041a9f6e1b369c01953c8f079740dd1f02421109855829edc0d3c1988",
-            fileName: "BlackHole2ch-0.6.1.pkg",
-            installerKind: .macOSPKG,
-            requiresAdministrator: true,
-            requiresReboot: true,
-            isPrerelease: false
-        )
     }
 
     public static func currentArchitecture() -> String {

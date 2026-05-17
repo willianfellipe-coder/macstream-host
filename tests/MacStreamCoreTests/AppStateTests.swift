@@ -121,17 +121,6 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
-    func testInstallBlackHoleReportsWaitingForInstallerCompletion() async {
-        let appState = makeTestAppState()
-
-        await appState.installBlackHole()
-
-        XCTAssertEqual(appState.dependencyInstallProgress?.id, .blackHole)
-        XCTAssertEqual(appState.dependencyInstallProgress?.stage, .waitingForUser)
-        XCTAssertEqual(appState.lastDependencyInstallResult?.requiresUserCompletion, true)
-    }
-
-    @MainActor
     func testSavingSettingsRebuildsRuntimeSettings() async {
         let settingsManager = MockSettingsManager()
         let appState = makeTestAppState(settingsManager: settingsManager)

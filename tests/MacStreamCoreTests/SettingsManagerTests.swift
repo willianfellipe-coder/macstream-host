@@ -10,7 +10,7 @@ final class SettingsManagerTests: XCTestCase {
 
         let settings = try manager.load()
 
-        XCTAssertEqual(settings.audioCaptureMode, .blackHole2ch)
+        XCTAssertEqual(settings.audioCaptureMode, .nativeSystemAudio)
         XCTAssertTrue(settings.configDirectoryPath.contains("MacStreamHost"))
     }
 

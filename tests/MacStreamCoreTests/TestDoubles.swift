@@ -60,10 +60,6 @@ final class MockBlackHoleManager: BlackHoleManaging {
 final class MockDependencyInstallerManager: DependencyInstalling {
     let artifacts: [DependencyArtifact]
     var sunshineResult: DependencyInstallResult
-    var blackHoleResult: DependencyInstallResult
-    var embeddedBlackHoleURL: URL?
-    var embeddedInstallResult: DependencyInstallResult?
-    private(set) var embeddedInstallCalls: Int = 0
 
     init() {
         let sunshineArtifact = DependencyArtifact(
@@ -79,20 +75,7 @@ final class MockDependencyInstallerManager: DependencyInstalling {
             requiresReboot: false,
             isPrerelease: false
         )
-        let blackHoleArtifact = DependencyArtifact(
-            id: .blackHole,
-            displayName: "BlackHole Test",
-            version: "test",
-            downloadURL: URL(string: "https://example.com/blackhole.pkg")!,
-            sourceURL: URL(string: "https://example.com/blackhole")!,
-            sha256: "00",
-            fileName: "blackhole.pkg",
-            installerKind: .macOSPKG,
-            requiresAdministrator: true,
-            requiresReboot: true,
-            isPrerelease: false
-        )
-        self.artifacts = [sunshineArtifact, blackHoleArtifact]
+        self.artifacts = [sunshineArtifact]
         self.sunshineResult = DependencyInstallResult(
             dependencyID: .sunshine,
             artifact: sunshineArtifact,
@@ -102,13 +85,6 @@ final class MockDependencyInstallerManager: DependencyInstalling {
             requiresUserCompletion: false,
             message: "Sunshine installed for tests."
         )
-        self.blackHoleResult = DependencyInstallResult(
-            dependencyID: .blackHole,
-            artifact: blackHoleArtifact,
-            downloadedPath: "/tmp/blackhole.pkg",
-            requiresUserCompletion: true,
-            message: "BlackHole installer opened for tests."
-        )
     }
 
     func artifact(for dependencyID: ManagedDependencyID) -> DependencyArtifact? {
@@ -117,32 +93,6 @@ final class MockDependencyInstallerManager: DependencyInstalling {
 
     func installManagedSunshine() async throws -> DependencyInstallResult {
         sunshineResult
-    }
-
-    func downloadAndOpenBlackHoleInstaller() async throws -> DependencyInstallResult {
-        blackHoleResult
-    }
-
-    func embeddedBlackHoleInstallerURL() -> URL? {
-        embeddedBlackHoleURL
-    }
-
-    func installEmbeddedBlackHole() async throws -> DependencyInstallResult {
-        embeddedInstallCalls += 1
-        if let embeddedInstallResult {
-            return embeddedInstallResult
-        }
-        // Default: behave as if the install succeeded silently (no
-        // Installer.app, no reboot needed).
-        return DependencyInstallResult(
-            dependencyID: .blackHole,
-            artifact: artifacts.first { $0.id == .blackHole }!,
-            downloadedPath: embeddedBlackHoleURL?.path ?? "/tmp/blackhole.pkg",
-            installedPath: "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver",
-            installedBinaryPath: nil,
-            requiresUserCompletion: false,
-            message: "Roteamento de áudio instalado (mock)."
-        )
     }
 }
 

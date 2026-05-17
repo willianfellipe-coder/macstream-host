@@ -349,15 +349,10 @@ private final class AgentRuntime {
         let sunshine = await runtime.sunshine.status()
 
         var mergedBlockers = blockers
-        var mergedWarnings = warnings
+        let mergedWarnings = warnings
 
         if sunshine.state == .running && sunshine.ownedProcessID == nil {
             mergedBlockers.append("Ha uma engine de video externa rodando; o MacStream nao controla este processo.")
-        }
-
-        if settings.audioCaptureMode == .blackHole2ch,
-           await runtime.blackHole.installationStatus() != .installed {
-            mergedWarnings.append("Rota de audio gerenciada ainda nao foi detectada.")
         }
 
         let state = stateOverride ?? deriveState(

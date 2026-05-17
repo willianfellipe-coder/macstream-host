@@ -101,6 +101,14 @@ struct DashboardView: View {
                 )
             }
 
+            if appState.hasSunshineAccessibilityFailure {
+                AccessibilityRecoveryBanner(
+                    onReset: { Task { await appState.resetSunshineAccessibilityGrant() } },
+                    onOpenSettings: { Task { await appState.openSettings(for: .accessibility) } },
+                    onRestartEngine: { Task { await appState.restartSunshine() } }
+                )
+            }
+
             RemoteWorkBanner(
                 report: appState.remoteWorkSession,
                 pairingAddresses: pairingAddresses,
@@ -348,7 +356,6 @@ struct SetupView: View {
 
 struct DependenciesView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var showBlackHoleExplainer = false
 
     var body: some View {
         PageContainer(title: "Componentes", subtitle: "Componentes gerenciados pelo MacStream para vídeo, áudio e pareamento.") {
@@ -372,14 +379,6 @@ struct DependenciesView: View {
                                 Task { await appState.installManagedSunshine() }
                             } label: {
                                 Label("Restaurar mecanismo de vídeo", systemImage: "arrow.down.circle")
-                            }
-                        }
-
-                        if appState.dependencyStatus(for: .blackHole) != .pass {
-                            Button {
-                                showBlackHoleExplainer = true
-                            } label: {
-                                Label("Configurar roteamento de áudio", systemImage: "speaker.wave.2")
                             }
                         }
                     }
@@ -444,24 +443,12 @@ struct DependenciesView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Componentes upstream independentes aparecem aqui para compliance e suporte.", systemImage: "shippingbox")
                     Label("O motor de vídeo é embarcado a partir de release upstream fixado e re-assinado sob a identidade do MacStream Host.", systemImage: "checkmark.shield")
-                    Label("O driver de audio é baixado de URL oficial, verificado por checksum e aberto no Installer.app.", systemImage: "safari")
+                    Label("Áudio do sistema é capturado nativamente pela Tap API do macOS 14.2+ — sem drivers terceiros.", systemImage: "speaker.wave.2")
                     Label("Portas de firewall não são alteradas automaticamente.", systemImage: "lock.shield")
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-        .sheet(isPresented: $showBlackHoleExplainer) {
-            BlackHoleInstallExplainer(
-                onCancel: { showBlackHoleExplainer = false },
-                onConfirm: {
-                    showBlackHoleExplainer = false
-                    Task {
-                        await appState.installBlackHole()
-                        await appState.pollForBlackHoleInstallation()
-                    }
-                }
-            )
         }
     }
 
@@ -553,6 +540,24 @@ struct SunshineView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            GroupBox("Pareamento Moonlight") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("O iPad listou o host duas vezes (um com cadeado, outro com triângulo de aviso)?")
+                        .font(.headline)
+                    Text("A entrada com triângulo é um pareamento antigo com certificado diferente. Resete os pareamentos abaixo, reinicie o motor e pareie novamente pela entrada com cadeado — depois remova a duplicata no iPad. O identificador estável do host (uniqueid) é preservado, então isso não deve acontecer em reinstalações futuras.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task {
+                            await appState.resetMoonlightPairings()
+                        }
+                    } label: {
+                        Label("Resetar pareamentos Moonlight", systemImage: "person.badge.minus")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Configuração isolada") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(appState.configurationManager.configDirectory.path)
@@ -639,90 +644,26 @@ struct AudioView: View {
     @State private var audioDevices: [AudioDevice] = []
     @State private var routeStatus: CheckStatus = .unknown
     @State private var currentOutputDevice: AudioDevice?
-    @State private var previousOutputDevice: AudioDevice?
-    @State private var isRoutingAudio = false
 
     var body: some View {
-        PageContainer(title: "Áudio", subtitle: "Dispositivos CoreAudio detectados, rota preferida e roteamento do sistema para o MacStream.") {
-            StatusPanel(
-                title: "Rota de áudio do MacStream",
-                value: appState.dashboard.blackHoleStatus.displayName,
-                detail: blackHoleDetail,
-                status: appState.dashboard.blackHoleStatus.checkStatus
-            )
-
-            GroupBox("Saída do sistema") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top, spacing: 12) {
-                        StatusIcon(status: systemOutputStatus)
+        PageContainer(title: "Áudio", subtitle: "Captura nativa via Tap API do macOS 14.2+ — dispositivos detectados ficam abaixo apenas para diagnóstico.") {
+            GroupBox("Captura de áudio do sistema") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        StatusIcon(status: .pass)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(currentOutputDevice?.name ?? "Saída desconhecida")
+                            Text("Tap API (macOS nativo)")
                                 .font(.headline)
-                            Text(systemOutputDetail)
+                            Text("O motor MacStream pega o áudio do sistema direto via CoreAudio. Sem drivers terceiros, sem Multi-Output Device, sem reboot.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-
-                    HStack {
-                        Button {
-                            Task {
-                                isRoutingAudio = true
-                                let result = await appState.routeSystemAudioToMacStream()
-                                if case .routed(let previous, _) = result, previous != nil {
-                                    previousOutputDevice = previous
-                                }
-                                await refreshSystemOutput()
-                                isRoutingAudio = false
-                            }
-                        } label: {
-                            Label("Rotear áudio para o MacStream", systemImage: "arrow.triangle.swap")
-                        }
-                        .disabled(isRoutingAudio || currentOutputIsBlackHole)
-
-                        if let restoreDevice = previousOutputDevice, currentOutputIsBlackHole {
-                            Button {
-                                Task {
-                                    isRoutingAudio = true
-                                    _ = await appState.restoreSystemAudioOutput(to: restoreDevice.id)
-                                    await refreshSystemOutput()
-                                    isRoutingAudio = false
-                                }
-                            } label: {
-                                Label("Restaurar \(restoreDevice.name)", systemImage: "arrow.uturn.backward")
-                            }
-                            .disabled(isRoutingAudio)
-                        }
-                    }
-
-                    Text("Sem essa troca, o motor do MacStream lê silêncio mesmo com o roteamento dedicado configurado — o macOS continua tocando pelos alto-falantes. Para continuar ouvindo localmente enquanto transmite, crie um Multi-Output Device em Audio MIDI Setup com BlackHole + alto-falantes.")
+                    Text("Saída atual do sistema: \(currentOutputDevice?.name ?? "desconhecida"). Ela continua tocando localmente; o Moonlight recebe o mesmo áudio em paralelo.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            GroupBox("Modo de captura inicial") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Modo atual: \(appState.runtimeSettings.audioCaptureMode.displayName)")
-                        .font(.headline)
-                    HStack {
-                        Button {
-                            Task { await appState.updateAudioCaptureMode(.nativeSystemAudio) }
-                        } label: {
-                            Label("Usar nativo", systemImage: "speaker.wave.2")
-                        }
-
-                        Button {
-                            Task { await appState.updateAudioCaptureMode(.blackHole2ch) }
-                        } label: {
-                            Label("Usar roteamento dedicado", systemImage: "dot.radiowaves.left.and.right")
-                        }
-                    }
-                    Text("Ao gerar a configuração, o app roteia o áudio para o canal virtual do MacStream apenas quando esse modo estiver selecionado.")
-                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -775,16 +716,6 @@ struct AudioView: View {
         }
     }
 
-    private var blackHoleDetail: String {
-        if appState.runtimeSettings.audioCaptureMode == .blackHole2ch {
-            return appState.dashboard.blackHoleStatus == .installed
-                ? "Roteamento dedicado configurado. Áudio do sistema é capturado pelo motor do MacStream."
-                : "Roteamento dedicado indisponível. Escolha captura nativa ou conclua a instalação do MacStream."
-        }
-
-        return "Modo atual usa captura nativa. O roteamento dedicado fica disponível como fallback."
-    }
-
     private func reloadAudioDevices() async {
         audioDevices = await appState.audioDeviceManager.listAudioDevices()
         routeStatus = await appState.audioDeviceManager.validateAudioRoute()
@@ -793,26 +724,6 @@ struct AudioView: View {
 
     private func refreshSystemOutput() async {
         currentOutputDevice = await appState.audioDeviceManager.currentSystemOutputDevice()
-    }
-
-    private var currentOutputIsBlackHole: Bool {
-        guard let device = currentOutputDevice else { return false }
-        return DefaultBlackHoleManager.isBlackHole2chDevice(device)
-    }
-
-    private var systemOutputStatus: CheckStatus {
-        guard let device = currentOutputDevice else { return .warning }
-        return DefaultBlackHoleManager.isBlackHole2chDevice(device) ? .pass : .warning
-    }
-
-    private var systemOutputDetail: String {
-        if currentOutputIsBlackHole {
-            return "Sistema roteado para o canal virtual do MacStream — o motor captura este áudio e transmite ao Moonlight."
-        }
-        if currentOutputDevice == nil {
-            return "Não foi possível identificar o dispositivo de saída atual via CoreAudio."
-        }
-        return "O sistema está tocando neste dispositivo. Para o áudio chegar pelo Moonlight, troque para o roteamento do MacStream."
     }
 
     private func deviceDetail(_ device: AudioDevice) -> String {
@@ -1049,7 +960,7 @@ struct SettingsView: View {
     @State private var sunshineBinaryPath = ""
     @State private var configDirectoryPath = ""
     @State private var logDirectoryPath = ""
-    @State private var audioCaptureMode: AudioCaptureMode = .blackHole2ch
+    @State private var audioCaptureMode: AudioCaptureMode = .nativeSystemAudio
     @State private var didLoadSettings = false
     @State private var pendingConfirmation: SettingsConfirmation?
     @State private var newPassword = ""
@@ -1067,11 +978,11 @@ struct SettingsView: View {
                     TextField("Log directory", text: $logDirectoryPath)
                         .textFieldStyle(.roundedBorder)
 
-                    Picker("Áudio", selection: $audioCaptureMode) {
-                        Text(AudioCaptureMode.nativeSystemAudio.displayName).tag(AudioCaptureMode.nativeSystemAudio)
-                        Text(AudioCaptureMode.blackHole2ch.displayName).tag(AudioCaptureMode.blackHole2ch)
+                    HStack {
+                        Image(systemName: "speaker.wave.2")
+                        Text("Áudio: Tap API nativa do macOS 14.2+")
                     }
-                    .pickerStyle(.segmented)
+                    .foregroundStyle(.secondary)
 
                     HStack {
                         Button {
@@ -1504,73 +1415,6 @@ struct OperationalStateBanner: View {
     }
 }
 
-struct BlackHoleInstallExplainer: View {
-    var onCancel: () -> Void
-    var onConfirm: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 14) {
-                Image(systemName: "speaker.wave.2.circle.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.blue)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Configurar roteamento de áudio")
-                        .font(.title2.weight(.bold))
-                    Text("O MacStream usa um driver oficial para capturar o áudio do sistema durante o streaming.")
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                StepLine(number: 1, title: "Download verificado", detail: "O MacStream baixa o instalador oficial e confere o checksum SHA-256 antes de abrir.")
-                StepLine(number: 2, title: "Instalador padrão do macOS", detail: "O Installer.app abre. Pode pedir sua senha de administrador para instalar o driver de sistema.")
-                StepLine(number: 3, title: "Reinicialização (em alguns casos)", detail: "Drivers de áudio podem exigir reiniciar o Mac para ficar ativos. Você pode reabrir o MacStream depois sem perda de progresso.")
-                StepLine(number: 4, title: "Detecção automática", detail: "Quando o driver aparecer, o MacStream marca esta etapa como concluída sem mais cliques.")
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancelar", role: .cancel) { onCancel() }
-                    .keyboardShortcut(.cancelAction)
-                Button {
-                    onConfirm()
-                } label: {
-                    Label("Baixar e abrir instalador", systemImage: "arrow.down.circle.fill")
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(24)
-        .frame(width: 560)
-    }
-}
-
-private struct StepLine: View {
-    let number: Int
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text("\(number)")
-                .font(.headline.monospacedDigit())
-                .frame(width: 28, height: 28)
-                .background(.blue.opacity(0.15), in: Circle())
-                .foregroundStyle(.blue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                Text(detail)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer()
-        }
-    }
-}
-
 struct ScreenRecordingRecoveryBanner: View {
     var onReset: () -> Void
     var onOpenSettings: () -> Void
@@ -1635,6 +1479,65 @@ struct ScreenRecordingRecoveryBanner: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12).stroke(.red.opacity(0.5), lineWidth: 1)
+        )
+    }
+}
+
+struct AccessibilityRecoveryBanner: View {
+    var onReset: () -> Void
+    var onOpenSettings: () -> Void
+    var onRestartEngine: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "keyboard.badge.ellipsis")
+                    .font(.system(size: 28, weight: .bold))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Teclado e mouse pelo Moonlight estão bloqueados")
+                        .font(.headline)
+                    Text("`AXIsProcessTrusted()` retornou falso para o motor MacStream. Sem Acessibilidade, o macOS recebe os eventos do iPad e descarta silenciosamente — vídeo continua mas qualquer tecla/clique morre no `CGEventPost`.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Resete a permissão, ative o toggle de **MacStream Host** em Ajustes > Privacidade > Acessibilidade, depois clique em **Reiniciar motor** abaixo. Não precisa adicionar binários separadamente — todos compartilham o identifier `org.macstream.host`.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            HStack {
+                Button {
+                    onReset()
+                } label: {
+                    Label("Resetar permissão de Acessibilidade", systemImage: "arrow.counterclockwise.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+
+                Button {
+                    onOpenSettings()
+                } label: {
+                    Label("Abrir Ajustes de Acessibilidade", systemImage: "accessibility")
+                }
+
+                Button {
+                    onRestartEngine()
+                } label: {
+                    Label("Reiniciar motor para aplicar", systemImage: "arrow.triangle.2.circlepath")
+                }
+
+                Spacer()
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12).fill(.orange.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.5), lineWidth: 1)
         )
     }
 }

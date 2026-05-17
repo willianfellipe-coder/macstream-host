@@ -60,7 +60,17 @@ final class ConfigurationManagerTests: XCTestCase {
 
         let newContents = try String(contentsOf: manager.sunshineConfigURL, encoding: .utf8)
         XCTAssertTrue(newContents.contains("sunshine_name = MacStream Host"))
-        XCTAssertTrue(newContents.contains("audio_sink = "))
+        // When no audio_sink is provided the config line must be OMITTED —
+        // Sunshine's macOS audio module reads an empty value as the literal
+        // device name `' '` and fails to fall back to the Tap API. The
+        // explanatory comment above the option may still mention the
+        // keyword; what must not appear is the actual `audio_sink =` line.
+        XCTAssertFalse(
+            newContents.split(separator: "\n").contains { line in
+                !line.hasPrefix("#") && line.contains("audio_sink")
+            },
+            "audio_sink line must be omitted when no sink is configured"
+        )
     }
 
     func testBackupExistingConfigBacksUpBothKnownFiles() throws {

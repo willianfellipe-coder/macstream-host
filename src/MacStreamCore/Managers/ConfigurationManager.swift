@@ -89,9 +89,16 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
     }
 
     public func renderDefaultSunshineConfiguration(audioSink: String?) -> String {
-        let sinkLine = "audio_sink = \(audioSink ?? "")"
+        // If no sink is configured, OMIT the audio_sink line entirely instead of
+        // emitting `audio_sink = ` with a trailing space — Sunshine's macOS
+        // audio module parses that lone space as a device name `' '` and
+        // logs `opening microphone ' ' failed`, refusing to fall back to the
+        // Tap API. Leaving the line out lets the engine pick the macOS
+        // system-audio Tap path by itself on macOS 14.2+.
+        let trimmedSink = audioSink?.trimmingCharacters(in: .whitespaces) ?? ""
+        let sinkLine = trimmedSink.isEmpty ? nil : "audio_sink = \(trimmedSink)"
 
-        return [
+        var lines: [String] = [
             "sunshine_name = MacStream Host",
             "locale = pt_BR",
             "min_log_level = info",
@@ -103,16 +110,21 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
             "high_resolution_scrolling = enabled",
             "",
             "stream_audio = enabled",
-            "# MVP default: prefer native macOS audio capture when supported.",
-            "# Fallback: set to BlackHole 2ch if native capture fails.",
-            sinkLine,
+            "# Audio capture defaults to the macOS Tap API on 14.2+ when no",
+            "# audio_sink is set. Override only to pin a specific input device."
+        ]
+        if let sinkLine {
+            lines.append(sinkLine)
+        }
+        lines.append(contentsOf: [
             "",
             "upnp = disabled",
             "address_family = ipv4",
             "port = 47989",
             "origin_web_ui_allowed = pc",
             ""
-        ].joined(separator: "\n")
+        ])
+        return lines.joined(separator: "\n")
     }
 
     public func renderDefaultAppsJSON() -> String {

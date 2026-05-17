@@ -29,18 +29,18 @@ STAGE_DIR="$ROOT_DIR/Resources/sunshine"
 CACHE_DIR="$ROOT_DIR/.build/sunshine-cache"
 STATE_FILE="$STAGE_DIR/.fetched-sha256"
 
-SUNSHINE_VERSION="v2026.508.45922"
+SUNSHINE_VERSION="v2026.516.143833"
 RELEASE_TAG_URL="https://github.com/LizardByte/Sunshine/releases/tag/$SUNSHINE_VERSION"
 
 ARCH="${ARCH:-$(uname -m)}"
 case "$ARCH" in
   arm64|arm64e)
     DMG_NAME="Sunshine-macOS-arm64.dmg"
-    EXPECTED_SHA256="8b9819f2dafcfa430b00cc08b07aa61d0ad138998d68f369bfc210e07db3eb4b"
+    EXPECTED_SHA256="ab31ad716117b913c6aab104268e820595c0baf89b319fd3b75d34c9ae8ddd1e"
     ;;
   x86_64)
     DMG_NAME="Sunshine-macOS-x86_64.dmg"
-    EXPECTED_SHA256="8d1518ef938e42d04fd013057aabdf2945d6a6dd12f053943d4d47f68d17089d"
+    EXPECTED_SHA256="6b17c8d5a20cb2d2fa7c3bb9387d1412e63bb5c964d6820af91dea12f31a665f"
     ;;
   *)
     echo "Unsupported architecture: $ARCH" >&2
