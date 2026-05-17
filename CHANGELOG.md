@@ -4,6 +4,106 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Accessibility recovery + stable codesign identity (2026-05-17)
+
+- **Stable self-signed identity:** `scripts/setup_local_codesign_identity.sh`
+  rewritten to import the private key as DER PKCS#8 (the only format
+  `security import` accepts as `-t priv`) and verify by actually
+  signing a probe binary instead of relying on `find-identity`
+  (self-signed certs don't surface there). `package_dmg.sh` now auto-
+  resolves `MacStream Local Dev` and signs every binary in the bundle
+  with it, so cdhash and the designated requirement stay stable across
+  rebuilds — TCC grants survive `./scripts/package_dmg.sh` cycles.
+- **Unified codesign identifier across the bundle:** `package_dmg.sh`
+  now passes `--identifier "org.macstream.host"` to `macstream-agent`
+  and `macstreamctl` (previously they took the codesign default
+  `<basename>`). With `responsibility_spawnattrs_setdisclaim` in place,
+  the engine's TCC checks are attributed to the agent's identifier — a
+  single Accessibility entry for `MacStream Host.app` now covers the
+  whole helper chain. Before this fix, keyboard and mouse forwarding
+  from Moonlight failed silently because the agent had identifier
+  `macstream-agent` and `AXIsProcessTrusted()` returned false.
+- **`AccessibilityProbe` + `macstreamctl axprobe`:** new `axprobe`
+  subcommand on `macstreamctl` calls `AXIsProcessTrusted()` and prints
+  `AX_TRUSTED=true|false`. Used by `scripts/validate-runtime.sh`
+  (section 8) for a definitive, identity-bound check.
+- **HealthCheck + dashboard banner:** `HealthCheckID.sunshineAccessibility`
+  added. `AppState.hasSunshineAccessibilityFailure` mirrors the existing
+  Screen Recording flag. `AccessibilityRecoveryBanner` in
+  `ContentView.swift` surfaces the issue with a one-click reset, deep
+  link to System Settings, and engine restart button.
+- **Live AX monitor:** `AppState.startLiveMonitors()` now polls
+  `AXIsProcessTrusted()` every refresh tick and, on a `false → true`
+  transition with the engine alive, automatically respawns the engine
+  so Sunshine's cached trust check is re-evaluated.
+- **GUI activation fix:** `MacStreamAppDelegate` was added to force
+  `.regular` activation policy and `activate(ignoringOtherApps:)` on
+  launch and reopen, so the dashboard window always comes to the front
+  after macOS's "Quit & Reopen" TCC dialog.
+- **`audio_sink` empty-string bug:** `ConfigurationManager` now omits
+  the line entirely when no sink is configured. Sunshine's macOS audio
+  module was reading the trailing space as a device name (`' '`),
+  failing with `opening microphone ' ' failed`, and refusing to fall
+  back to the Tap API. Defaults flipped to `.nativeSystemAudio`.
+
+### BlackHole completely removed from installation (2026-05-16)
+
+Sunshine `v2026.516+` captures system audio via the macOS Tap API on
+macOS 14.2+, so we no longer ship the BlackHole virtual driver. This
+removes the admin password prompt, the reboot requirement, and the
+"Configurar roteamento de áudio" path from the dashboard entirely.
+
+- **Bundle no longer contains `BlackHole2ch.pkg`.** `package_dmg.sh`
+  no longer copies the .pkg into `Contents/Resources/dependencies/`.
+  `Resources/dependencies/`, `scripts/fetch_blackhole.sh`, and
+  `scripts/check-blackhole-installed.sh` were deleted from the repo.
+- **`DependencyInstalling` protocol shrinks to Sunshine-only.** Removed
+  `downloadAndOpenBlackHoleInstaller`, `embeddedBlackHoleInstallerURL`,
+  and `installEmbeddedBlackHole`. The `PrivilegedInstaller` helper was
+  deleted (no remaining consumer).
+- **`DependencyManifest.defaultArtifacts()` returns only Sunshine.**
+  `blackHoleArtifact()` factory was removed.
+- **UI cleanup**: removed the "Configurar roteamento de áudio" button,
+  `BlackHoleInstallExplainer` sheet, "Usar roteamento dedicado" toggle,
+  and the audio-routing-to-BlackHole section of the Audio tab. The
+  Settings picker for capture mode collapsed to a static "Tap API
+  nativa" label.
+- **Agent no longer warns about a missing BlackHole driver** when the
+  user is on `audioCaptureMode = .blackHole2ch`. That mode still exists
+  as an opt-in for users with an externally-installed BlackHole, but
+  the install path is documented as "manual" rather than guided.
+
+### Sunshine 2026.516.143833 + dashboard live monitors (2026-05-16)
+
+- **Bumped the embedded engine to Sunshine `v2026.516.143833` (stable).**
+  Previously pinned to the `v2026.508.45922` prerelease. The stable bump
+  pulls in the security fix [`GHSA-ph75-mgxh-mv57`](https://github.com/LizardByte/Sunshine/security/advisories/GHSA-ph75-mgxh-mv57)
+  plus the macOS Tap API audio capture path, mouse wheel + modifier
+  input fixes, and the `adjust_thread_priority` / `set_thread_name`
+  perf work. SHA-256 pins, `UPSTREAMS.md`, `fetch_sunshine.sh` and
+  `DependencyManifest.sunshineArtifact` all updated.
+- **Native macOS audio capture is now the default.** `MacStreamHostSettings`
+  defaults to `audioCaptureMode = .nativeSystemAudio`, which leaves
+  Sunshine's `audio_sink` blank and lets the engine route audio through
+  the system Tap API on macOS 14.2+. BlackHole is demoted to an
+  optional Multi-Output Device fallback — the dependency row, setup
+  checklist and onboarding step no longer show yellow when the driver
+  is missing in native mode.
+- **Stable Sunshine identity (`sunshine_state.json`).** A new
+  `SunshineIdentityStore` generates a persistent `uniqueid` once and
+  mirrors it into `~/.config/sunshine/sunshine_state.json` before each
+  engine boot, so Moonlight clients no longer see the host as a "new"
+  computer after every restart. Reset-pairings flow available from
+  the engine view.
+- **Live CoreAudio + foreground refresh monitors.** `AudioDeviceMonitor`
+  subscribes to `kAudioHardwarePropertyDevices`; `AppState.startLiveMonitors()`
+  also drives a 5s foreground refresh. Status flips the moment a driver
+  is added/removed without the user reopening the window.
+- **Engine respawn supervisor.** The agent restarts the engine after
+  unexpected death (rate-limited to 3 attempts / 60s) so post-sleep
+  crashes don't take the dashboard down.
+
+
 ### Milestone: Moonlight streaming works end-to-end (2026-05-14)
 
 First confirmed end-to-end Moonlight session from iPad: live video via

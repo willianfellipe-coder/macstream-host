@@ -1,18 +1,17 @@
 # Post-install setup (manual TCC grants)
 
 This document describes the manual steps every MacStream Host user has to
-go through after installing or rebuilding the app. Once
-`scripts/setup_local_codesign_identity.sh` works end-to-end (or the
-project signs with a real Apple Developer ID), TCC grants will survive
-rebuilds and most of this becomes one-time.
+go through after installing the app **for the first time**.
 
-Until then, every `./scripts/package_dmg.sh` reissues the app with a new
-ad-hoc `cdhash`, macOS invalidates the previous grants, and the steps
-below have to be repeated.
+Builds are signed by `scripts/setup_local_codesign_identity.sh` with the
+locally-provisioned identity `MacStream Local Dev`, so the cdhash + cert
+chain stay stable across rebuilds and the TCC grants below survive
+`./scripts/package_dmg.sh` cycles. You only redo these steps after a
+fresh keychain wipe or a cert rotation.
 
-## Why two binaries, two TCC entries
+## Why one TCC entry covers the whole bundle
 
-MacStream Host ships two related Mach-O binaries inside the same `.app`:
+MacStream Host ships three Mach-O binaries inside the same `.app`:
 
 | Binary | Path | Role |
 |---|---|---|
@@ -21,10 +20,12 @@ MacStream Host ships two related Mach-O binaries inside the same `.app`:
 | `macstream-agent` | `/Applications/MacStream Host.app/Contents/MacOS/macstream-agent` | Resident user-LaunchAgent that holds power assertions and runs the privacy lock. |
 
 All three are codesigned with the same identifier (`org.macstream.host`)
-so macOS treats them as parts of the same product. **But** with ad-hoc
-signing the TCC framework still keys grants per-`cdhash`, and each
-binary has its own `cdhash`. The user has to add each binary that needs
-a TCC category to the corresponding privacy list manually.
+**and** with the same authority (`MacStream Local Dev`). The agent
+spawns the engine via `responsibility_spawnattrs_setdisclaim`, which
+attributes the engine's TCC checks back to the agent. Because the
+agent, engine and GUI share identity, granting `MacStream Host.app`
+once in System Settings is enough to cover the whole chain — no need
+to add each binary individually.
 
 ## Step 1 — Reset stale grants (only after a rebuild)
 
@@ -43,32 +44,33 @@ that runs the first three commands.
 
 ## Step 2 — Grant Screen Recording
 
-1. Open **System Settings → Privacy & Security → Gravação do Áudio do
-   Sistema e da Tela** (or "Screen Recording" on older macOS).
+1. Open **System Settings → Privacy & Security → Screen Recording**
+   (in pt-BR: "Gravação do Áudio do Sistema e da Tela").
 2. Click the `+` button. Authenticate when prompted.
-3. Press `⌘⇧G`, paste `/Applications/MacStream Host.app/Contents/MacOS`,
-   press Return.
-4. Select **`MacStream Host`** → Open. Toggle ON.
-5. Click `+` again, repeat for **`MacStreamEngine`**. Toggle ON.
+3. Navigate to `/Applications` and add **`MacStream Host`**. Toggle ON.
+4. macOS will offer to "Quit & Reopen" — accept.
 
-Both entries have to be ON. Sunshine reports `Error: No screen capture
-permission!` in `~/.config/sunshine/sunshine.log` if either is missing.
+The single entry covers `MacStreamEngine` as well (shared codesign
+identifier). If `~/.config/sunshine/sunshine.log` still shows
+`Error: No screen capture permission!`, restart the engine via the
+dashboard ("Reiniciar") — Sunshine caches the trust check at boot.
 
 ## Step 3 — Grant Accessibility
 
-Without Accessibility, the touchpad from Moonlight still works (mouse
-events take a different routing path), but the keyboard does NOT — the
-engine silently fails to inject `CGEventPost` keyboard events.
+Without Accessibility, ALL keyboard and mouse forwarding from Moonlight
+is silently dropped — the engine receives the events but `CGEventPost`
+gets nowhere. The macOS log doesn't surface the denial, so the only
+symptom is "vídeo + áudio funcionam, input não chega".
 
-1. **System Settings → Privacy & Security → Acessibilidade**.
+1. **System Settings → Privacy & Security → Accessibility**.
 2. Click `+`, authenticate.
-3. Add and toggle ON:
-   - `MacStream Host`
-   - `MacStreamEngine`
-   - `macstream-agent`
+3. Navigate to `/Applications` and add **`MacStream Host`**. Toggle ON.
 
-All three are at
-`/Applications/MacStream Host.app/Contents/MacOS/`.
+The dashboard probes `AXIsProcessTrusted()` via the embedded
+`macstreamctl axprobe` and shows the `AccessibilityRecoveryBanner` if
+the grant is missing. When you flip the toggle ON the live monitor
+detects the transition and respawns the engine automatically so it
+re-evaluates trust without a manual restart.
 
 ## Step 4 — (Optional) Microphone
 
@@ -104,29 +106,28 @@ Expected:
    addresses) and start the pairing flow.
 3. Enter the PIN in the engine's web panel when Moonlight prompts.
 
-## Audio path (BlackHole 2ch)
+## Audio path (Tap API nativa do macOS)
 
-The Sunshine config has `audio_sink = BlackHole 2ch`. For audio to
-actually leave the Mac:
+A partir do Sunshine `v2026.516.143833`, o áudio do sistema é capturado
+diretamente via Core Audio Tap API no macOS 14.2+. `sunshine.conf` é
+emitido sem `audio_sink`, o engine cria um aggregate device com a Tap, e
+o som do sistema flui pro Moonlight sem driver terceiro.
 
-1. The BlackHole 2ch driver must be installed (the Components tab of
-   MacStream Host handles the install via the official `.pkg`).
-2. **The system's default audio output must be set to BlackHole 2ch**,
-   otherwise BlackHole captures silence. Today this is a manual step
-   in Audio MIDI Setup; the project's `Etapa 2` adds an in-app button
-   to flip the system output to BlackHole with one click.
+Na primeira sessão Moonlight ativa, o macOS exibe um prompt do tipo
+"MacStream Host quer gravar áudio de outros apps" (System Audio
+Recording, macOS 14.4+). Aceite — é a única confirmação manual.
 
-After step 2, the user typically wants to hear local audio too. The
-recommended setup is a *Multi-Output Device* in Audio MIDI Setup that
-includes both BlackHole 2ch and the real speakers.
+Quem quiser ouvir local **e** transmitir ao mesmo tempo continua podendo
+instalar BlackHole 2ch manualmente (não acompanha o app) e configurar
+um Multi-Output Device em Audio MIDI Setup. Isso é opcional.
 
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Moonlight shows "Failed to start streaming" | Screen Recording missing for `MacStreamEngine` | Re-do Step 2 |
-| Touchpad works, keyboard does not | Accessibility missing for `MacStreamEngine` | Re-do Step 3 |
-| `Error: No screen capture permission!` in sunshine.log after rebuild | New cdhash; previous grant invalidated | `tccutil reset` (Step 1) + Step 2 + Step 3 |
+| Moonlight shows "Failed to start streaming" | Screen Recording denied | Re-do Step 2, then restart the engine |
+| Video and audio work, **neither keyboard nor mouse** reach the Mac | Accessibility denied for `org.macstream.host` | Re-do Step 3; the AccessibilityRecoveryBanner in the dashboard will surface this automatically |
+| `Error: No screen capture permission!` in sunshine.log after rebuild | TCC grant was reset (rare with stable identity) | `tccutil reset` (Step 1) + Step 2 + restart the engine |
 | Black strip across remote feed during host lock | Old build before the host-lock fix | Update to a build that contains `Suppress unlock panel during stream` |
 | Host stays locked after disconnecting Moonlight | Old build before auto-release fix | Update to a build that contains `Extract SunshineSessionTracker` |
-| Moonlight has video but no audio | System output not routed to BlackHole 2ch | Audio MIDI Setup → Output → BlackHole 2ch (or Multi-Output device including BlackHole) |
+| Moonlight has video but no audio | macOS Tap API permission not granted (System Audio Recording, macOS 14.4+) | First Moonlight session triggers the prompt; accept it. If you missed it, the dashboard's audio card surfaces the warning. |
