@@ -4,6 +4,116 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Document the iPad cursor duplication (2026-05-18)
+
+User report: with the iPad on a Magic Keyboard / external mouse, the
+Moonlight session shows two cursors simultaneously — the iPad's native
+system pointer rendered on top of the streamed host cursor. This is
+**not** a MacStream regression: Sunshine doesn't expose a cursor
+visibility knob, none of the recent commits (multi-display lock, lock
+toggle, low-latency profile) touched cursor rendering, and `strings` on
+the engine confirms there's no `capture_cursor` / `show_cursor` /
+`hide_cursor` config key. The duplication is iPadOS rendering its own
+pointer on top of every app (including the Moonlight video layer) when
+a trackpad/mouse is paired.
+
+Fix is on the iPad side. Documented in `docs/POST_INSTALL.md`
+troubleshooting table: tap the screen once during the session to enter
+"mouse capture mode" (iPad pointer disappears, only host cursor stays).
+Alternatively, set Moonlight iOS settings → `Touchscreen mode` to
+`Touchscreen as trackpad`.
+
+### Dashboard lock/unlock toggle (2026-05-18)
+
+The "Bloquear host" action in the main dashboard
+([ContentView.swift:166-193](src/MacStreamHostApp/Views/ContentView.swift#L166-L193))
+now toggles to "Desbloquear host" while `appState.privacyOverlayActive`
+is true. Before this fix the dashboard button stayed labelled "Bloquear
+host" even when the lock was active, and the only way to unlock from
+the GUI was via the menu bar item — surprising UX after the multi-
+display lock fix made the dashboard's display stay lit.
+
+The unlock branch reuses `appState.dismissPrivacyOverlay(passwordCandidate: nil)`
+(same call the tray uses), painted with `.tint(.orange)` for
+consistency with `AccessibilityRecoveryBanner`. When
+`appState.overlayUnlockRequiresPassword` is true the inline button is
+disabled with a help tooltip routing the user to the floating panel
+(which has the password field). No new state was added.
+
+### Multi-display lock without freezing the remote stream (2026-05-18)
+
+End-to-end rework of the privacy lock so it dims **every** physical
+display attached to the Mac (built-in panel + LG ULTRAWIDE external)
+without breaking the Moonlight session.
+
+- **Gamma blackout fallback for externals.**
+  [DisplayBrightnessController.swift](src/MacStreamHostApp/Views/DisplayBrightnessController.swift)
+  gained `CGSetDisplayTransferByFormula`-based gamma blackout. External
+  displays (LG via DisplayPort/HDMI) don't accept
+  `DisplayServicesSetBrightness` or `IODisplaySetFloatParameter`, so
+  brightness-only paths used to skip them. Gamma blackout is the only
+  knob that physically darkens those panels without putting them in
+  standby.
+- **Keep the dashboard's display lit so the unlock UI stays visible.**
+  `PrivacyOverlayController.show(suppressPanel:)` picks an
+  `interactiveScreen()` (priority: key window → main window → any
+  visible main window → `NSScreen.main`) and dims everything **except**
+  that display when `suppressPanel = false`. The floating unlock panel
+  is positioned on that screen. Without this, gamma=0 / brightness=0
+  hides the unlock panel itself.
+- **Don't freeze the Moonlight cursor when locking during an active
+  stream.** Three concurrent root causes:
+  1. **Gamma blackout corrupts the ScreenCaptureKit feed.** SCStream
+     samples the framebuffer post-gamma on the streamed display, so
+     gamma=0 turned the remote feed black AND caused SCK to drop frames.
+     Fix: `dimAllDisplays(except:streamedDisplayID:streamingActive:)`
+     now skips gamma on the `streamedDisplayID` (the engine's
+     `CGMainDisplayID()`) but still attempts brightness paths — the
+     panel backlight on a MacBook is invisible to SCK.
+  2. **`NSApp.activate(ignoringOtherApps:)` redirected
+     `CGEventPost`-injected keyboard events to the dashboard window.**
+     Fix: when `suppressPanel = true` (stream is live), the controller
+     deliberately does **not** activate the app.
+  3. **The floating unlock panel leaked into the captured frame as a
+     black rectangle and intercepted forwarded mouse events** on
+     macOS Sequoia/Tahoe despite `sharingType = .none`. Fix: don't
+     create the panel during streaming (`suppressPanel = true`).
+     Unlocking during a stream is routed through the menu bar item.
+- **Built-in MacBook panel still goes dark even while streaming from
+  it.** The brightness path (DisplayServices → IOKit) only touches the
+  backlight, which SCStream cannot see. So the local viewer goes dark
+  while the remote viewer keeps seeing the live desktop.
+
+Behavior matrix:
+
+| Display state | Lock mode | Method order |
+|---|---|---|
+| Built-in, not streaming | normal lock | DisplayServices → IOKit → gamma |
+| Built-in, streaming | normal lock | DisplayServices → IOKit (no gamma) |
+| External, not streaming | normal lock | gamma → DisplayServices → IOKit |
+| External, streaming, **is** the streamed display | normal lock | DisplayServices → IOKit (no gamma) |
+| External, streaming, **not** the streamed display | normal lock | gamma → DisplayServices → IOKit |
+| Any display containing the active window | not streaming | **skipped** (keeps unlock panel visible) |
+
+Sidecar / AirPlay receivers are still skipped entirely — dimming a
+wireless display can affect its framebuffer.
+
+### Stop the Tailscale CLI shim error spam (2026-05-18)
+
+Sunshine ships a `/usr/local/bin/tailscale` shim that, when the GUI
+helper isn't reachable, prints "The Tailscale CLI failed to start: The
+operation couldn't be completed. (Tailscale.CLIError error 1.)" to
+**stdout** with exit code **0** — looking exactly like a successful
+"no Tailscale IP" response. `NetworkDiagnosticsManager` was accepting
+the string as an address candidate, surfacing the error in the
+dashboard.
+
+Fix in [NetworkDiagnosticsManager.swift](src/MacStreamCore/Managers/NetworkDiagnosticsManager.swift):
+the shim's output is now regex-validated against IPv4 / IPv6 patterns
+before being accepted. Cache results for 60s to avoid burning shell
+processes. The dashboard's "Endereços para Moonlight" row no longer
+shows the false error.
+
 ### Kill the ghost Dock icon (2026-05-18)
 
 User report: even with the dashboard closed, the Dock kept showing
@@ -47,6 +157,42 @@ shows zero Dock tiles (layer 20) under any MacStream owner while the
 dashboard is closed. 135/135 tests still pass; 29/29 runtime validation
 still green.
 
+### Tier 2: low-latency Sunshine profile (2026-05-17)
+
+Optional `lowLatencyMode` toggle in `MacStreamHostSettings` (default
+**off**, opt-in) that tweaks `sunshine.conf` for LAN-only setups:
+
+- `fec_percentage = 0` (default is 20%) — saves video bitrate on
+  reliable LAN links.
+- `min_threads = 4` — Sunshine spins up encoder threads upfront
+  instead of growing the pool lazily.
+- `min_log_level = warning` to drop info-level chatter that competes
+  with the encoder thread for CPU.
+
+Wired through `ConfigurationManager.generateSunshineConfig(profile:)`
+and a Settings toggle in the Advanced tab. Tests:
+`ConfigurationManagerTests.testLowLatencyProfileWritesFecAndThreads`.
+
+### Tier 1: background auto-start + tray-first UX (2026-05-17)
+
+User requested a polish pass: server should start with the Mac and run
+exclusively in the menu bar, no dashboard window opening at boot.
+
+- **`startInBackground` setting (default off).** `MacStreamHostSettings`
+  gained a Bool; when true and `loginItemEnabled` is also true, the
+  agent boots, registers a `SMAppService.mainApp` login item, and the
+  GUI launches with `setActivationPolicy(.accessory)` — no Dock tile,
+  no auto-focused window. The dashboard opens on demand from the tray.
+- **Complete tray menu.** `MenuBarContent.swift` now exposes every
+  meaningful action from the dashboard: start/stop engine, pair
+  device, lock/unlock host, open dashboard, quit. Status rows mirror
+  the dashboard's health checks live.
+- **Dashboard cleanup.** Removed the legacy "Iniciar agora" full-width
+  banner that competed with the new tray-first flow. The dashboard
+  itself now stays in tray context — closing the window doesn't quit
+  the app; reopening from the tray re-promotes activation policy to
+  `.regular` and the Dock icon reappears just for the duration of the
+  visible window.
 
 ### Accessibility recovery + stable codesign identity (2026-05-17)
 
