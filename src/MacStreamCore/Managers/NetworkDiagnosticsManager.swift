@@ -208,29 +208,93 @@ public final class LsofNetworkPortChecker: NetworkPortChecking {
 public final class TailscaleCLIAddressProvider: TailscaleAddressProviding {
     private let binaryResolver: CommandBinaryResolving
     private let runner: CommandRunning
+    private let dateProvider: () -> Date
+
+    /// Tailscale.app on macOS installs a 68-byte shim at
+    /// /usr/local/bin/tailscale that invokes a helper inside the GUI
+    /// bundle. The helper:
+    ///   (1) frequently prints an error to stdout instead of stderr
+    ///   ("The Tailscale CLI failed to start: The operation couldn't
+    ///   be completed. (Tailscale.CLIError error 1.)") AND still exits
+    ///   with code 0; AND
+    ///   (2) raises a user-visible Tailscale.app banner every time
+    ///   the shim fails.
+    /// Without caching, the dashboard's `startLiveMonitors` 5-second
+    /// refresh would spam the Tailscale GUI with that banner. We
+    /// remember the last successful (or null) probe for `cacheTTL` so
+    /// real Tailscale state still propagates while the GUI gets only
+    /// one probe per minute.
+    private static let cacheTTL: TimeInterval = 60
+
+    private actor Cache {
+        var lastValue: String?
+        var lastQueriedAt: Date?
+
+        func read(now: Date, ttl: TimeInterval) -> (cached: Bool, value: String?) {
+            if let lastQueriedAt, now.timeIntervalSince(lastQueriedAt) < ttl {
+                return (true, lastValue)
+            }
+            return (false, nil)
+        }
+
+        func write(value: String?, at: Date) {
+            lastValue = value
+            lastQueriedAt = at
+        }
+    }
+
+    private let cache = Cache()
 
     public init(
         binaryResolver: CommandBinaryResolving = DefaultCommandBinaryResolver(),
-        runner: CommandRunning = ProcessCommandRunner()
+        runner: CommandRunning = ProcessCommandRunner(),
+        dateProvider: @escaping () -> Date = Date.init
     ) {
         self.binaryResolver = binaryResolver
         self.runner = runner
+        self.dateProvider = dateProvider
     }
 
     public func tailscaleAddress() async -> String? {
+        let now = dateProvider()
+        let cached = await cache.read(now: now, ttl: Self.cacheTTL)
+        if cached.cached {
+            return cached.value
+        }
+
         guard let tailscalePath = binaryResolver.resolve(command: "tailscale") else {
+            await cache.write(value: nil, at: now)
             return nil
         }
 
         let result = await runner.run(executablePath: tailscalePath, arguments: ["ip", "-4"], timeout: 2)
         guard result.exitCode == 0 else {
+            await cache.write(value: nil, at: now)
             return nil
         }
 
-        return result.standardOutput
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
+        let address = Self.firstIPv4(in: result.standardOutput)
+        await cache.write(value: address, at: now)
+        return address
+    }
+
+    /// Pulls the first IPv4-shaped token out of the command output. The
+    /// macOS Tailscale.app shim swallows hard errors and writes the
+    /// message ("The Tailscale CLI failed to start: ...") to stdout
+    /// while returning exit 0 — without this filter we would surface
+    /// that message as if it were the user's Tailscale address.
+    static func firstIPv4(in output: String) -> String? {
+        let pattern = #"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$"#
+        let regex = try? NSRegularExpression(pattern: pattern)
+        for raw in output.components(separatedBy: .newlines) {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let range = NSRange(trimmed.startIndex..., in: trimmed)
+            if regex?.firstMatch(in: trimmed, range: range) != nil {
+                return trimmed
+            }
+        }
+        return nil
     }
 }
 

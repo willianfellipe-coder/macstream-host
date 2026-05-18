@@ -51,6 +51,78 @@ final class NetworkDiagnosticsManagerTests: XCTestCase {
         XCTAssertEqual(result.aggregateStatus, .warning)
     }
 
+    // MARK: - TailscaleCLIAddressProvider
+
+    /// macOS Tailscale.app installs a 68-byte shim at /usr/local/bin/tailscale
+    /// that prints an error message to STDOUT (not stderr) AND returns
+    /// exit code 0 when the GUI helper can't be reached. Before this
+    /// fix, the provider would treat that string as the Tailscale IP
+    /// AND every dashboard refresh would re-trigger the shim, causing
+    /// the Tailscale GUI to spam a "CLI failed to start" banner.
+    func testTailscaleProviderRejectsShimErrorOutput() async {
+        let provider = TailscaleCLIAddressProvider(
+            binaryResolver: FakeCommandBinaryResolver(path: "/usr/local/bin/tailscale"),
+            runner: FakeNetworkCommandRunner(
+                exitCode: 0,
+                standardOutput: "The Tailscale CLI failed to start: The operation couldn't be completed. (Tailscale.CLIError error 1.)"
+            )
+        )
+
+        let result = await provider.tailscaleAddress()
+
+        XCTAssertNil(result, "Shim error text must NOT be returned as an IP")
+    }
+
+    func testTailscaleProviderAcceptsValidIPv4() async {
+        let provider = TailscaleCLIAddressProvider(
+            binaryResolver: FakeCommandBinaryResolver(path: "/usr/local/bin/tailscale"),
+            runner: FakeNetworkCommandRunner(exitCode: 0, standardOutput: "100.64.0.10\n")
+        )
+
+        let result = await provider.tailscaleAddress()
+
+        XCTAssertEqual(result, "100.64.0.10")
+    }
+
+    func testTailscaleProviderCachesAndDoesNotSpamCLI() async {
+        let runner = CountingCommandRunner(
+            inner: FakeNetworkCommandRunner(exitCode: 0, standardOutput: "100.64.0.42\n")
+        )
+        let provider = TailscaleCLIAddressProvider(
+            binaryResolver: FakeCommandBinaryResolver(path: "/usr/local/bin/tailscale"),
+            runner: runner,
+            dateProvider: { Date(timeIntervalSince1970: 0) } // frozen clock
+        )
+
+        for _ in 0..<10 {
+            _ = await provider.tailscaleAddress()
+        }
+
+        XCTAssertEqual(
+            runner.callCount,
+            1,
+            "10 quick reads must hit the CLI once — otherwise the Tailscale GUI gets spammed"
+        )
+    }
+
+    func testTailscaleProviderRefreshesAfterCacheExpiry() async {
+        let runner = CountingCommandRunner(
+            inner: FakeNetworkCommandRunner(exitCode: 0, standardOutput: "100.64.0.99\n")
+        )
+        var currentTime = Date(timeIntervalSince1970: 0)
+        let provider = TailscaleCLIAddressProvider(
+            binaryResolver: FakeCommandBinaryResolver(path: "/usr/local/bin/tailscale"),
+            runner: runner,
+            dateProvider: { currentTime }
+        )
+
+        _ = await provider.tailscaleAddress()
+        currentTime = Date(timeIntervalSince1970: 120) // 2 minutes later, past the 60s TTL
+        _ = await provider.tailscaleAddress()
+
+        XCTAssertEqual(runner.callCount, 2, "Cache must expire after TTL")
+    }
+
     func testNetworkDiagnosticsWarnsWhenNoLocalAddressExists() async {
         let manager = DefaultNetworkDiagnosticsManager(
             addressProvider: FakeNetworkAddressProvider(addresses: []),
@@ -141,5 +213,26 @@ private struct FakeNetworkCommandRunner: CommandRunning {
 
     func run(executablePath: String, arguments: [String], timeout: TimeInterval) async -> CommandResult {
         CommandResult(exitCode: exitCode, standardOutput: standardOutput)
+    }
+}
+
+/// Wraps an inner CommandRunning and counts invocations. Used to assert
+/// that the Tailscale CLI cache is actually preventing repeat shim
+/// invocations (otherwise the Tailscale GUI gets spammed with error
+/// banners every 5 seconds).
+private final class CountingCommandRunner: CommandRunning {
+    private let inner: CommandRunning
+    private(set) var callCount = 0
+    private let lock = NSLock()
+
+    init(inner: CommandRunning) {
+        self.inner = inner
+    }
+
+    func run(executablePath: String, arguments: [String], timeout: TimeInterval) async -> CommandResult {
+        lock.lock()
+        callCount += 1
+        lock.unlock()
+        return await inner.run(executablePath: executablePath, arguments: arguments, timeout: timeout)
     }
 }
