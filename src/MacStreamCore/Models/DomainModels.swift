@@ -850,6 +850,11 @@ public struct MacStreamHostSettings: Codable, Equatable {
     public var hostPrivacyPolicy: HostPrivacyPolicy
     public var appPasswordPolicy: AppPasswordPolicy
     public var showMenuBarItem: Bool
+    /// When true, the GUI app registers itself with macOS as a login item AND
+    /// — whether launched at boot or by the user — starts as an accessory
+    /// (no Dock icon, no main window shown). The menu bar item is the only
+    /// entry point. The dashboard is opened on demand via the tray.
+    public var startInBackground: Bool
 
     public init(
         sunshineBinaryPath: String? = nil,
@@ -860,7 +865,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
         powerPolicy: PowerPolicy = .defaults,
         hostPrivacyPolicy: HostPrivacyPolicy = .defaults,
         appPasswordPolicy: AppPasswordPolicy = .defaults,
-        showMenuBarItem: Bool = true
+        showMenuBarItem: Bool = true,
+        startInBackground: Bool = false
     ) {
         self.sunshineBinaryPath = sunshineBinaryPath
         self.agentExecutablePath = agentExecutablePath
@@ -871,6 +877,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         self.hostPrivacyPolicy = hostPrivacyPolicy
         self.appPasswordPolicy = appPasswordPolicy
         self.showMenuBarItem = showMenuBarItem
+        self.startInBackground = startInBackground
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -883,6 +890,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         case hostPrivacyPolicy
         case appPasswordPolicy
         case showMenuBarItem
+        case startInBackground
     }
 
     public init(from decoder: Decoder) throws {
@@ -899,6 +907,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         hostPrivacyPolicy = try container.decodeIfPresent(HostPrivacyPolicy.self, forKey: .hostPrivacyPolicy) ?? .defaults
         appPasswordPolicy = try container.decodeIfPresent(AppPasswordPolicy.self, forKey: .appPasswordPolicy) ?? .defaults
         showMenuBarItem = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarItem) ?? true
+        startInBackground = try container.decodeIfPresent(Bool.self, forKey: .startInBackground) ?? false
     }
 
     public static func defaults(fileManager: FileManager = .default) -> MacStreamHostSettings {

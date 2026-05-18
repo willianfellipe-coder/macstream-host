@@ -4,20 +4,51 @@ import AppKit
 import MacStreamCore
 import SwiftUI
 
-/// AppDelegate that pins activation policy to `.regular` (dock icon + window
-/// + menu bar item) and force-activates on launch + on re-open. Without this
-/// the combination of `MenuBarExtra` + macOS quit-and-reopen (which fires
-/// after every TCC permission toggle) leaves SwiftUI in a state where the
-/// main window stays alive but never comes to the foreground — the user sees
-/// "the app didn't open" because System Settings is in front and the window
-/// stays on whichever Space it was last on.
+/// AppDelegate that pins activation policy on launch + on re-open. Two
+/// distinct modes:
+///
+/// - `MacStreamHostSettings.startInBackground == false` (default):
+///   Behaves like a normal Mac app. `.regular` policy, Dock icon, main
+///   window shown, MenuBarExtra also visible. Activates on launch and
+///   on re-open so the window comes to the front after macOS's
+///   "Quit & Reopen" TCC dialog.
+///
+/// - `MacStreamHostSettings.startInBackground == true`:
+///   Behaves as a tray-only background app. `.accessory` policy, no
+///   Dock icon, the main window is dismissed right after WindowGroup
+///   instantiates it. The user reaches the dashboard via the menu bar
+///   item ("Abrir dashboard"). This is the mode for auto-start at
+///   login: the system boots, server comes up, MacStream Host runs
+///   silently in the tray ready to accept Moonlight clients.
 final class MacStreamAppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by MacStreamHostApp.init() before applicationDidFinishLaunching
+    /// fires, so the delegate knows which mode to enter.
+    static var startInBackground: Bool = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        if Self.startInBackground {
+            NSApp.setActivationPolicy(.accessory)
+            // Dismiss the WindowGroup window that SwiftUI creates by default.
+            // We do it on the next run-loop tick because the window may not
+            // have been added to NSApp.windows yet at this point.
+            DispatchQueue.main.async {
+                for window in NSApp.windows where window.canBecomeMain {
+                    window.orderOut(nil)
+                }
+            }
+        } else {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // The user clicked the Dock icon (regular mode) or invoked the
+        // app while the window is closed. Promote to regular if we were
+        // in accessory mode so the user gets a Dock icon + window.
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
         if !hasVisibleWindows {
             for window in sender.windows where window.canBecomeMain {
                 window.makeKeyAndOrderFront(nil)
@@ -36,7 +67,12 @@ struct MacStreamHostApp: App {
     @State private var privacyOverlayController: PrivacyOverlayController?
 
     init() {
-        _appState = StateObject(wrappedValue: AppState.localDiagnostics())
+        let state = AppState.localDiagnostics()
+        _appState = StateObject(wrappedValue: state)
+        // Communicate the mode to the AppDelegate BEFORE
+        // applicationDidFinishLaunching fires. The delegate reads this
+        // static when the run loop spins up.
+        MacStreamAppDelegate.startInBackground = state.runtimeSettings.startInBackground
     }
 
     var body: some Scene {

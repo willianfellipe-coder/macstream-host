@@ -48,12 +48,30 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
 struct ContentView: View {
     @State private var selection: AppSection? = .dashboard
 
+    private static let primarySections: [AppSection] = [
+        .dashboard, .moonlight, .audio, .settings
+    ]
+    private static let advancedSections: [AppSection] = [
+        .setup, .dependencies, .sunshine, .network, .diagnostics
+    ]
+
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: $selection) { section in
-                Label(section.title, systemImage: section.symbol)
-                    .tag(section)
+            List(selection: $selection) {
+                Section("Principais") {
+                    ForEach(Self.primarySections) { section in
+                        Label(section.title, systemImage: section.symbol)
+                            .tag(section)
+                    }
+                }
+                Section("Avançado") {
+                    ForEach(Self.advancedSections) { section in
+                        Label(section.title, systemImage: section.symbol)
+                            .tag(section)
+                    }
+                }
             }
+            .listStyle(.sidebar)
             .navigationTitle("MacStream Host")
         } detail: {
             switch selection ?? .dashboard {
@@ -118,24 +136,26 @@ struct DashboardView: View {
             GroupBox("Ações principais") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 10) {
-                        Button {
-                            Task { await appState.prepareRemoteWorkMode() }
-                        } label: {
-                            Label("Preparar MacStream", systemImage: "wand.and.stars")
+                        if appState.remoteWorkSession.state == .running
+                            || appState.remoteWorkSession.state == .degraded {
+                            Button {
+                                Task { await appState.stopRemoteWorkMode() }
+                            } label: {
+                                Label("Parar modo remoto", systemImage: "stop.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
+                        } else {
+                            Button {
+                                Task {
+                                    await appState.prepareRemoteWorkMode()
+                                    await appState.startRemoteWorkMode()
+                                }
+                            } label: {
+                                Label("Iniciar modo remoto", systemImage: "play.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-
-                        Button {
-                            Task { await appState.requestMacOSPermissions() }
-                        } label: {
-                            Label("Permissões", systemImage: "hand.raised")
-                        }
-
-                        Button {
-                            Task { await appState.startRemoteWorkMode() }
-                        } label: {
-                            Label("Iniciar modo remoto", systemImage: "play.fill")
-                        }
-                        .disabled(appState.remoteWorkSession.state == .running)
 
                         Button {
                             Task { await appState.openSunshineWebUI() }
@@ -149,16 +169,12 @@ struct DashboardView: View {
                             Label("Bloquear host", systemImage: "lock.display")
                         }
 
-                        Button {
-                            Task { await appState.stopRemoteWorkMode() }
-                        } label: {
-                            Label("Parar", systemImage: "stop.fill")
-                        }
+                        Spacer()
 
                         Button {
                             Task { _ = await appState.exportRemoteWorkSupportBundle() }
                         } label: {
-                            Label("Diagnóstico", systemImage: "archivebox")
+                            Label("Exportar diagnóstico", systemImage: "archivebox")
                         }
                     }
 
@@ -171,53 +187,62 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
-                StatusPanel(
-                    title: "Modo remoto",
-                    value: appState.remoteWorkSession.state.displayName,
-                    detail: appState.remoteWorkSession.nextStep,
-                    status: appState.remoteWorkSession.state.checkStatus
-                )
+            // Technical status grid is kept available but collapsed by default —
+            // most users only care about "está rodando ou não". Power users that
+            // need component-by-component visibility expand the section.
+            DisclosureGroup("Status técnico (componentes)") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 16)], spacing: 16) {
+                    StatusPanel(
+                        title: "Modo remoto",
+                        value: appState.remoteWorkSession.state.displayName,
+                        detail: appState.remoteWorkSession.nextStep,
+                        status: appState.remoteWorkSession.state.checkStatus
+                    )
 
-                StatusPanel(
-                    title: "Agente residente",
-                    value: appState.agentStatus.isRunning ? "Ativo" : appState.agentStatus.launchAgentStatus.displayName,
-                    detail: appState.agentStatus.detail,
-                    status: appState.agentStatus.checkStatus
-                )
+                    StatusPanel(
+                        title: "Agente residente",
+                        value: appState.agentStatus.isRunning ? "Ativo" : appState.agentStatus.launchAgentStatus.displayName,
+                        detail: appState.agentStatus.detail,
+                        status: appState.agentStatus.checkStatus
+                    )
 
-                StatusPanel(
-                    title: "Engines",
-                    value: appState.managedEngineStatus.aggregateStatus.displayName,
-                    detail: "Video, audio e rede gerenciados pelo MacStream",
-                    status: appState.managedEngineStatus.aggregateStatus
-                )
+                    StatusPanel(
+                        title: "Engines",
+                        value: appState.managedEngineStatus.aggregateStatus.displayName,
+                        detail: "Video, audio e rede gerenciados pelo MacStream",
+                        status: appState.managedEngineStatus.aggregateStatus
+                    )
 
-                StatusPanel(
-                    title: "Permissões macOS",
-                    value: appState.dashboard.permissionsStatus.aggregateStatus.displayName,
-                    detail: appState.dashboard.permissionsStatus.aggregateStatus == .pass
-                        ? "Permissões críticas OK; Local Network/Accessibility são validadas pela engine quando precisam."
-                        : "Permissões críticas (Gravação de Tela ou Microfone) pendentes.",
-                    status: appState.dashboard.permissionsStatus.aggregateStatus
-                )
+                    StatusPanel(
+                        title: "Permissões macOS",
+                        value: appState.dashboard.permissionsStatus.aggregateStatus.displayName,
+                        detail: appState.dashboard.permissionsStatus.aggregateStatus == .pass
+                            ? "Permissões críticas OK."
+                            : "Permissões críticas (Gravação de Tela ou Microfone) pendentes.",
+                        status: appState.dashboard.permissionsStatus.aggregateStatus
+                    )
 
-                StatusPanel(
-                    title: "Energia",
-                    value: appState.powerAssertionStatus.isActive ? "Keep-awake ativo" : "Aguardando sessão",
-                    detail: appState.powerAssertionStatus.detail,
-                    status: appState.powerAssertionStatus.checkStatus
-                )
+                    StatusPanel(
+                        title: "Energia",
+                        value: appState.powerAssertionStatus.isActive ? "Keep-awake ativo" : "Aguardando sessão",
+                        detail: appState.powerAssertionStatus.detail,
+                        status: appState.powerAssertionStatus.checkStatus
+                    )
 
-                StatusPanel(
-                    title: "Privacidade",
-                    value: appState.hostPrivacyStatus.displayLabel,
-                    detail: appState.hostPrivacyStatus.detail,
-                    status: appState.hostPrivacyStatus.checkStatus
-                )
+                    StatusPanel(
+                        title: "Privacidade",
+                        value: appState.hostPrivacyStatus.displayLabel,
+                        detail: appState.hostPrivacyStatus.detail,
+                        status: appState.hostPrivacyStatus.checkStatus
+                    )
+                }
+                .padding(.top, 8)
             }
 
-            OnboardingStepList(steps: appState.onboardingSteps)
+            DisclosureGroup("Onboarding (primeira execução)") {
+                OnboardingStepList(steps: appState.onboardingSteps)
+                    .padding(.top, 8)
+            }
 
             HStack {
                 Button {
@@ -1079,6 +1104,17 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            GroupBox("Iniciar com o sistema") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Iniciar com o sistema em segundo plano", isOn: startInBackgroundBinding)
+                    Text("Quando ativo, o macOS registra o MacStream Host como Login Item. Ao acender o Mac, o servidor sobe sozinho e o app fica disponível só pela barra de menus — sem janela e sem ícone no Dock — pronto pra receber conexões do Moonlight. Você pode abrir o dashboard a qualquer momento clicando no item da barra de menus.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Senha do app") {
                 VStack(alignment: .leading, spacing: 12) {
                     if appState.isAppPasswordSet {
@@ -1270,6 +1306,15 @@ struct SettingsView: View {
                 var policy = appState.runtimeSettings.hostPrivacyPolicy
                 policy.allowManualLock = value
                 Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
+    private var startInBackgroundBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.startInBackground },
+            set: { value in
+                Task { await appState.updateStartInBackground(value) }
             }
         )
     }

@@ -58,6 +58,10 @@ public final class AppState: ObservableObject {
     /// Identity store used by the "Resetar pareamentos" action.
     private let sunshineIdentityStore: SunshineIdentityStoring = DefaultSunshineIdentityStore()
 
+    /// macOS Login Item registration used by the "Iniciar com o sistema"
+    /// toggle. Wraps `SMAppService.mainApp`.
+    private let loginItemService: LoginItemManaging = DefaultLoginItemService()
+
     /// Last result the foreground monitor saw from `AXIsProcessTrusted()`.
     /// Used by `evaluateAccessibilityRecovery` to detect a `false → true`
     /// transition (user just granted Accessibility) and automatically
@@ -679,6 +683,35 @@ public final class AppState: ObservableObject {
         var settings = runtimeSettings
         settings.showMenuBarItem = visible
         await saveSettings(settings, successMessage: visible ? "Icone na barra de menus ativado." : "Icone na barra de menus ocultado.")
+    }
+
+    /// Persists the user's preference and synchronizes it with the macOS
+    /// Login Items registry (`SMAppService.mainApp`). When enabled, the
+    /// app auto-launches on login and runs as a tray-only accessory (no
+    /// Dock icon, no main window). Dashboard is reachable on demand via
+    /// the menu bar item.
+    public func updateStartInBackground(_ enabled: Bool) async {
+        var settings = runtimeSettings
+        settings.startInBackground = enabled
+        do {
+            try loginItemService.setRegistered(enabled)
+        } catch {
+            lastOperationMessage = error.localizedDescription
+            return
+        }
+        await saveSettings(
+            settings,
+            successMessage: enabled
+                ? "Iniciar com o sistema ativado — o MacStream Host vai subir em segundo plano após login."
+                : "Iniciar com o sistema desativado."
+        )
+    }
+
+    /// Returns the current login-item registration as macOS reports it.
+    /// Useful for the Settings toggle to reflect external changes the user
+    /// may have made via System Settings > General > Login Items.
+    public var isLoginItemRegistered: Bool {
+        loginItemService.isRegistered
     }
 
     public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {

@@ -8,20 +8,23 @@ struct MenuBarContent: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        Text(headlineTitle)
-            .bold()
-        Text(headlineDetail)
-            .font(.caption)
+        // Headline — status at a glance.
+        Text(headlineTitle).bold()
+        Text(headlineDetail).font(.caption)
 
         Divider()
 
-        // Status rows (non-interactive).
+        // Quick status (non-interactive).
         Text(keepAwakeLine)
         Text(agentLine)
         Text(privacyLine)
+        if let pairing = pairingAddressLine {
+            Text(pairing)
+        }
 
         Divider()
 
+        // Primary remote-work toggle.
         if isRunning {
             Button("Parar modo remoto") {
                 Task { await appState.stopRemoteWorkMode() }
@@ -35,42 +38,58 @@ struct MenuBarContent: View {
             }
         }
 
+        // Engine maintenance — only while running so the user can't
+        // accidentally restart a not-yet-started engine.
         if isRunning {
-            Button("Reiniciar mecanismo de vídeo") {
+            Button("Reiniciar motor de vídeo") {
                 Task { await appState.restartSunshine() }
             }
 
             Button("Regerar configuração + reiniciar") {
                 Task { await appState.regenerateAndRestartVideo() }
             }
+        }
 
-            Button("Bloquear host") {
+        Divider()
+
+        // Host privacy — lock + unlock pair. Unlock is only shown when
+        // the overlay is actually active so the menu stays compact.
+        if appState.privacyOverlayActive {
+            Button("Desbloquear tela do host") {
+                _ = appState.dismissPrivacyOverlay(passwordCandidate: nil)
+            }
+            .disabled(appState.overlayUnlockRequiresPassword)
+        } else {
+            Button("Bloquear tela do host") {
                 Task { await appState.lockHostForPrivacy() }
             }
+            .disabled(!appState.runtimeSettings.hostPrivacyPolicy.allowManualLock)
+        }
+
+        Divider()
+
+        // Diagnostics & ancillary actions.
+        Button("Abrir painel web (Sunshine)") {
+            Task { await appState.openSunshineWebUI() }
         }
 
         Button("Atualizar diagnóstico") {
             Task { await appState.refresh() }
         }
 
-        Divider()
-
-        if appState.privacyOverlayActive {
-            Button("Desbloquear tela") {
-                // Menu bar fallback: only works when no password is required.
-                _ = appState.dismissPrivacyOverlay(passwordCandidate: nil)
-            }
-            .disabled(appState.overlayUnlockRequiresPassword)
+        Button("Exportar pacote de suporte") {
+            Task { _ = await appState.exportRemoteWorkSupportBundle() }
         }
 
-        Button("Abrir MacStream Host") {
+        Divider()
+
+        // App lifecycle — dashboard + quit.
+        Button("Abrir dashboard MacStream") {
             openMainWindow()
         }
         .keyboardShortcut("o", modifiers: .command)
 
-        Divider()
-
-        Button("Sair") {
+        Button("Sair do MacStream Host") {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
@@ -90,6 +109,17 @@ struct MenuBarContent: View {
 
     private var privacyLine: String {
         "Privacidade: \(appState.hostPrivacyStatus.displayLabel)"
+    }
+
+    /// First non-loopback address from the network diagnostic. Lets the
+    /// user paste it into Moonlight's "Add Host Manually" without having
+    /// to open the dashboard. Returns nil when nothing useful is
+    /// available so the line is suppressed.
+    private var pairingAddressLine: String? {
+        guard let first = appState.dashboard.networkStatus.localAddresses.first else {
+            return nil
+        }
+        return "Endereço: \(first)"
     }
 
     private var isRunning: Bool {
@@ -118,7 +148,14 @@ struct MenuBarContent: View {
         return next.isEmpty ? "Acesso remoto produtivo do Mac." : next
     }
 
+    /// Brings the SwiftUI WindowGroup window to the front. If the app
+    /// was launched in background mode (accessory policy, no Dock icon),
+    /// also promotes the activation policy to `.regular` so the user
+    /// sees the Dock icon while interacting with the dashboard.
     private func openMainWindow() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeMain {
             window.makeKeyAndOrderFront(nil)

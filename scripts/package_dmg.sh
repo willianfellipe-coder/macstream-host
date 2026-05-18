@@ -91,6 +91,15 @@ cp "$ROOT_DIR/UPSTREAMS.md" "$RESOURCES_DIR/UPSTREAMS.md"
 # the OS attributes its TCC calls to the parent bundle identity. The binary
 # uses @executable_path/../Frameworks/ and ../Resources/assets/ which resolve
 # to Contents/Frameworks/ and Contents/Resources/assets/ from this location.
+#
+# Known limitation: the engine appears in the Dock as a `.regular`
+# activation policy app even though it's headless. We tried wrapping
+# it with a Swift shim that called `setActivationPolicy(.accessory)`
+# before `execve` — but LaunchServices re-evaluates the policy from
+# the new Mach-O image after exec, so the override doesn't stick. The
+# permanent fix is to inject a `__TEXT,__info_plist` Mach-O section
+# with `LSUIElement=true` directly into the Sunshine binary using
+# LIEF (Python). Tracked as a polish item.
 cp "$SUNSHINE_STAGE_BIN" "$MACOS_DIR/$ENGINE_BIN_NAME"
 chmod 755 "$MACOS_DIR/$ENGINE_BIN_NAME"
 
