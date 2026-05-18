@@ -446,7 +446,8 @@ public final class AppState: ObservableObject {
             try logManager.rotateLogs(maxBytes: 5 * 1024 * 1024, backupCount: 3)
             writes = try configurationManager.writeDefaultFiles(
                 overwrite: overwriteConfig,
-                audioSink: runtimeSettings.audioSink
+                audioSink: runtimeSettings.audioSink,
+                lowLatency: runtimeSettings.lowLatencyMode
             )
 
             if startAfterValidation {
@@ -714,13 +715,56 @@ public final class AppState: ObservableObject {
         loginItemService.isRegistered
     }
 
+    /// Toggles the low-latency Sunshine profile (fec_percentage=0,
+    /// min_threads=4, min_log_level=warning). Persists the new setting,
+    /// regenerates `sunshine.conf` from the template, and respawns the
+    /// engine so the new values take effect immediately. Without the
+    /// restart the live engine would keep streaming with whatever it
+    /// loaded at boot.
+    public func updateLowLatencyMode(_ enabled: Bool) async {
+        var settings = runtimeSettings
+        settings.lowLatencyMode = enabled
+        do {
+            try settingsManager.save(settings.normalized())
+            runtimeSettings = settings.normalized()
+        } catch {
+            lastOperationMessage = "Não foi possível salvar o perfil de latência: \(error.localizedDescription)"
+            return
+        }
+
+        // Regenerate sunshine.conf with the new profile applied and
+        // restart the engine so Sunshine picks up the new values.
+        await runSunshineOperation(
+            successMessage: enabled
+                ? "Perfil Baixa latência ativado. Motor reiniciado com FEC=0 / min_threads=4."
+                : "Perfil Baixa latência desativado. Motor reiniciado com valores padrão."
+        ) {
+            _ = try configurationManager.writeDefaultFiles(
+                overwrite: true,
+                audioSink: runtimeSettings.audioSink,
+                lowLatency: runtimeSettings.lowLatencyMode
+            )
+            // Restart only if the engine is actually owned by us — if
+            // it isn't running yet the new conf will be read on next
+            // start anyway.
+            let sunshine = await sunshineManager.status()
+            if sunshine.ownedProcessID != nil {
+                try await sunshineManager.restart()
+            }
+        }
+    }
+
     public func exportRemoteWorkSupportBundle() async -> SupportBundleResult? {
         await exportSupportBundleZip()
     }
 
     public func createDefaultSunshineConfiguration() async {
         await runSunshineOperation(successMessage: "Configuração padrão do motor gerada.") {
-            _ = try configurationManager.writeDefaultFiles(overwrite: false, audioSink: runtimeSettings.audioSink)
+            _ = try configurationManager.writeDefaultFiles(
+                overwrite: false,
+                audioSink: runtimeSettings.audioSink,
+                lowLatency: runtimeSettings.lowLatencyMode
+            )
         }
     }
 
@@ -748,7 +792,11 @@ public final class AppState: ObservableObject {
     /// the engine is live.
     public func regenerateAndRestartVideo() async {
         await runSunshineOperation(successMessage: "Configuração regerada e mecanismo de vídeo reiniciado.") {
-            _ = try configurationManager.writeDefaultFiles(overwrite: true, audioSink: runtimeSettings.audioSink)
+            _ = try configurationManager.writeDefaultFiles(
+                overwrite: true,
+                audioSink: runtimeSettings.audioSink,
+                lowLatency: runtimeSettings.lowLatencyMode
+            )
             try await sunshineManager.restart()
         }
     }

@@ -1115,6 +1115,21 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            GroupBox("Desempenho do streaming") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Perfil de baixa latência (LAN)", isOn: lowLatencyBinding)
+                    Text("Reduz o lag do mouse e do teclado emitindo `fec_percentage = 0` (sem Forward Error Correction) e `min_threads = 4` (mais threads de encoding) no `sunshine.conf`. Ao ligar/desligar, o motor é regerado e reiniciado automaticamente.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("⚠️ Recomendado **só para LAN cabeada ou Wi-Fi forte**. Em redes ruidosas (Wi-Fi distante, Tailscale pela internet, hotspot do celular), a ausência de FEC causa stutter quando pacotes caem. Desative se notar perda de quadros.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             GroupBox("Senha do app") {
                 VStack(alignment: .leading, spacing: 12) {
                     if appState.isAppPasswordSet {
@@ -1315,6 +1330,15 @@ struct SettingsView: View {
             get: { appState.runtimeSettings.startInBackground },
             set: { value in
                 Task { await appState.updateStartInBackground(value) }
+            }
+        )
+    }
+
+    private var lowLatencyBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.lowLatencyMode },
+            set: { value in
+                Task { await appState.updateLowLatencyMode(value) }
             }
         )
     }

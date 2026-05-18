@@ -856,6 +856,17 @@ public struct MacStreamHostSettings: Codable, Equatable {
     /// entry point. The dashboard is opened on demand via the tray.
     public var startInBackground: Bool
 
+    /// Low-latency tuning profile. When true, `sunshine.conf` is emitted
+    /// with `fec_percentage = 0` (skip Forward Error Correction on the
+    /// assumption that the stream runs over a local network with
+    /// negligible packet loss), `min_threads = 4` (more parallel
+    /// encoding threads → less queueing latency on the encoder), and
+    /// `min_log_level = warning` (drop the per-frame info logs).
+    /// Trade-off: on lossy networks (Wi-Fi spam, cellular, Tailscale
+    /// over Internet) the absence of FEC means more retransmissions →
+    /// stutter. The Settings UI surfaces this warning explicitly.
+    public var lowLatencyMode: Bool
+
     public init(
         sunshineBinaryPath: String? = nil,
         agentExecutablePath: String? = nil,
@@ -866,7 +877,8 @@ public struct MacStreamHostSettings: Codable, Equatable {
         hostPrivacyPolicy: HostPrivacyPolicy = .defaults,
         appPasswordPolicy: AppPasswordPolicy = .defaults,
         showMenuBarItem: Bool = true,
-        startInBackground: Bool = false
+        startInBackground: Bool = false,
+        lowLatencyMode: Bool = false
     ) {
         self.sunshineBinaryPath = sunshineBinaryPath
         self.agentExecutablePath = agentExecutablePath
@@ -878,6 +890,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         self.appPasswordPolicy = appPasswordPolicy
         self.showMenuBarItem = showMenuBarItem
         self.startInBackground = startInBackground
+        self.lowLatencyMode = lowLatencyMode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -891,6 +904,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         case appPasswordPolicy
         case showMenuBarItem
         case startInBackground
+        case lowLatencyMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -908,6 +922,7 @@ public struct MacStreamHostSettings: Codable, Equatable {
         appPasswordPolicy = try container.decodeIfPresent(AppPasswordPolicy.self, forKey: .appPasswordPolicy) ?? .defaults
         showMenuBarItem = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarItem) ?? true
         startInBackground = try container.decodeIfPresent(Bool.self, forKey: .startInBackground) ?? false
+        lowLatencyMode = try container.decodeIfPresent(Bool.self, forKey: .lowLatencyMode) ?? false
     }
 
     public static func defaults(fileManager: FileManager = .default) -> MacStreamHostSettings {
@@ -974,7 +989,11 @@ public struct MacStreamHostSettings: Codable, Equatable {
             logDirectoryPath: (logDirectoryPath as NSString).expandingTildeInPath,
             audioCaptureMode: audioCaptureMode == .unknown ? .nativeSystemAudio : audioCaptureMode,
             powerPolicy: powerPolicy,
-            hostPrivacyPolicy: hostPrivacyPolicy
+            hostPrivacyPolicy: hostPrivacyPolicy,
+            appPasswordPolicy: appPasswordPolicy,
+            showMenuBarItem: showMenuBarItem,
+            startInBackground: startInBackground,
+            lowLatencyMode: lowLatencyMode
         )
     }
 }

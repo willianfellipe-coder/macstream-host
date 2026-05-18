@@ -202,7 +202,11 @@ private final class AgentRuntime {
         case .startRemoteWork:
             do {
                 try runtime.log.rotateLogs(maxBytes: 5 * 1024 * 1024, backupCount: 3)
-                _ = try runtime.configuration.writeDefaultFiles(overwrite: false, audioSink: settings.audioSink)
+                _ = try runtime.configuration.writeDefaultFiles(
+                    overwrite: false,
+                    audioSink: settings.audioSink,
+                    lowLatency: settings.lowLatencyMode
+                )
                 _ = try await runtime.power.acquire(policy: settings.powerPolicy)
                 try await runtime.sunshine.start()
                 logger.info("started remote work mode")

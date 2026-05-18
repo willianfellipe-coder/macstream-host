@@ -122,15 +122,31 @@ public protocol ConfigurationManaging {
     var appsJSONURL: URL { get }
 
     func ensureDirectories() throws
-    func writeDefaultConfig(overwrite: Bool, audioSink: String?) throws -> ConfigurationFileWriteResult
+    func writeDefaultConfig(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> ConfigurationFileWriteResult
     func writeDefaultApps(overwrite: Bool) throws -> ConfigurationFileWriteResult
-    func writeDefaultFiles(overwrite: Bool, audioSink: String?) throws -> [ConfigurationFileWriteResult]
+    func writeDefaultFiles(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> [ConfigurationFileWriteResult]
     func backupExistingConfig() throws -> [URL]
     func validate(_ configuration: RecommendedStreamingConfiguration) -> ConfigurationValidationResult
     func validateSunshineConfiguration(_ contents: String) -> ConfigurationValidationResult
-    func renderDefaultSunshineConfiguration(audioSink: String?) -> String
+    func renderDefaultSunshineConfiguration(audioSink: String?, lowLatency: Bool) -> String
     func renderDefaultAppsJSON() -> String
     func archiveConfigurationDirectory() throws -> URL?
+}
+
+public extension ConfigurationManaging {
+    /// Backwards-compatible defaults so callers that don't care about
+    /// latency tuning keep the previous behaviour.
+    func writeDefaultConfig(overwrite: Bool, audioSink: String?) throws -> ConfigurationFileWriteResult {
+        try writeDefaultConfig(overwrite: overwrite, audioSink: audioSink, lowLatency: false)
+    }
+
+    func writeDefaultFiles(overwrite: Bool, audioSink: String?) throws -> [ConfigurationFileWriteResult] {
+        try writeDefaultFiles(overwrite: overwrite, audioSink: audioSink, lowLatency: false)
+    }
+
+    func renderDefaultSunshineConfiguration(audioSink: String?) -> String {
+        renderDefaultSunshineConfiguration(audioSink: audioSink, lowLatency: false)
+    }
 }
 
 public protocol LogManaging {

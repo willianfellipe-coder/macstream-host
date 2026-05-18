@@ -37,14 +37,22 @@ public final class DefaultRemoteWorkSessionManager: RemoteWorkSessionManaging {
 
     public func prepare(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport {
         let settings = settingsProvider()
-        _ = try configurationManager.writeDefaultFiles(overwrite: overwriteConfig, audioSink: settings.audioSink)
+        _ = try configurationManager.writeDefaultFiles(
+            overwrite: overwriteConfig,
+            audioSink: settings.audioSink,
+            lowLatency: settings.lowLatencyMode
+        )
         try await agentManager.install()
         return await makeReport(stateOverride: nil)
     }
 
     public func start(overwriteConfig: Bool) async throws -> RemoteWorkSessionReport {
         let settings = settingsProvider()
-        _ = try configurationManager.writeDefaultFiles(overwrite: overwriteConfig, audioSink: settings.audioSink)
+        _ = try configurationManager.writeDefaultFiles(
+            overwrite: overwriteConfig,
+            audioSink: settings.audioSink,
+            lowLatency: settings.lowLatencyMode
+        )
         try await agentManager.install()
         try agentManager.writeCommand(MacStreamAgentCommand(kind: .startRemoteWork))
         try await agentManager.load()

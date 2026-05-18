@@ -73,6 +73,58 @@ final class ConfigurationManagerTests: XCTestCase {
         )
     }
 
+    func testLowLatencyProfileEmitsFecZeroAndMinThreads() throws {
+        let directory = try makeTemporaryDirectory()
+        let manager = DefaultConfigurationManager(configDirectory: directory)
+
+        let rendered = manager.renderDefaultSunshineConfiguration(
+            audioSink: nil,
+            lowLatency: true
+        )
+
+        // Profile-specific knobs MUST appear.
+        XCTAssertTrue(
+            rendered.split(separator: "\n").contains { line in
+                !line.hasPrefix("#") && line.trimmingCharacters(in: .whitespaces) == "fec_percentage = 0"
+            },
+            "fec_percentage = 0 missing from low-latency profile"
+        )
+        XCTAssertTrue(
+            rendered.split(separator: "\n").contains { line in
+                !line.hasPrefix("#") && line.trimmingCharacters(in: .whitespaces) == "min_threads = 4"
+            },
+            "min_threads = 4 missing from low-latency profile"
+        )
+        XCTAssertTrue(
+            rendered.contains("min_log_level = warning"),
+            "low-latency should drop log level to warning"
+        )
+    }
+
+    func testDefaultProfileOmitsLowLatencyKnobs() throws {
+        let directory = try makeTemporaryDirectory()
+        let manager = DefaultConfigurationManager(configDirectory: directory)
+
+        let rendered = manager.renderDefaultSunshineConfiguration(
+            audioSink: nil,
+            lowLatency: false
+        )
+
+        XCTAssertFalse(
+            rendered.split(separator: "\n").contains { line in
+                !line.hasPrefix("#") && line.contains("fec_percentage")
+            },
+            "Default profile must not pin fec_percentage"
+        )
+        XCTAssertFalse(
+            rendered.split(separator: "\n").contains { line in
+                !line.hasPrefix("#") && line.contains("min_threads")
+            },
+            "Default profile must not pin min_threads"
+        )
+        XCTAssertTrue(rendered.contains("min_log_level = info"))
+    }
+
     func testBackupExistingConfigBacksUpBothKnownFiles() throws {
         let directory = try makeTemporaryDirectory()
         let manager = DefaultConfigurationManager(

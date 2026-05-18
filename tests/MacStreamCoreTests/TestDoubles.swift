@@ -449,7 +449,7 @@ final class MockConfigurationManager: ConfigurationManaging {
 
     func ensureDirectories() throws {}
 
-    func writeDefaultConfig(overwrite: Bool, audioSink: String?) throws -> ConfigurationFileWriteResult {
+    func writeDefaultConfig(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> ConfigurationFileWriteResult {
         ConfigurationFileWriteResult(url: sunshineConfigURL, action: .created)
     }
 
@@ -457,9 +457,9 @@ final class MockConfigurationManager: ConfigurationManaging {
         ConfigurationFileWriteResult(url: appsJSONURL, action: .created)
     }
 
-    func writeDefaultFiles(overwrite: Bool, audioSink: String?) throws -> [ConfigurationFileWriteResult] {
+    func writeDefaultFiles(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> [ConfigurationFileWriteResult] {
         [
-            try writeDefaultConfig(overwrite: overwrite, audioSink: audioSink),
+            try writeDefaultConfig(overwrite: overwrite, audioSink: audioSink, lowLatency: lowLatency),
             try writeDefaultApps(overwrite: overwrite)
         ]
     }
@@ -476,18 +476,23 @@ final class MockConfigurationManager: ConfigurationManaging {
         SunshineConfigurationValidator.validateSunshineConfig(contents)
     }
 
-    func renderDefaultSunshineConfiguration(audioSink: String?) -> String {
-        [
+    func renderDefaultSunshineConfiguration(audioSink: String?, lowLatency: Bool) -> String {
+        var lines = [
             "sunshine_name = MacStream Host",
             "locale = pt_BR",
-            "min_log_level = info",
+            "min_log_level = \(lowLatency ? "warning" : "info")",
             "stream_audio = enabled",
             "audio_sink = \(audioSink ?? "")",
             "upnp = disabled",
             "address_family = ipv4",
             "port = 47989",
             "origin_web_ui_allowed = pc"
-        ].joined(separator: "\n")
+        ]
+        if lowLatency {
+            lines.append("fec_percentage = 0")
+            lines.append("min_threads = 4")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func renderDefaultAppsJSON() -> String {

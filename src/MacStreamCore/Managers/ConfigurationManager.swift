@@ -41,8 +41,8 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
         try fileManager.createDirectory(at: configDirectory, withIntermediateDirectories: true)
     }
 
-    public func writeDefaultConfig(overwrite: Bool, audioSink: String?) throws -> ConfigurationFileWriteResult {
-        let contents = renderDefaultSunshineConfiguration(audioSink: audioSink)
+    public func writeDefaultConfig(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> ConfigurationFileWriteResult {
+        let contents = renderDefaultSunshineConfiguration(audioSink: audioSink, lowLatency: lowLatency)
         let validation = validateSunshineConfiguration(contents)
 
         guard validation.isValid else {
@@ -63,9 +63,9 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
         return try write(contents, to: appsJSONURL, overwrite: overwrite)
     }
 
-    public func writeDefaultFiles(overwrite: Bool, audioSink: String?) throws -> [ConfigurationFileWriteResult] {
+    public func writeDefaultFiles(overwrite: Bool, audioSink: String?, lowLatency: Bool) throws -> [ConfigurationFileWriteResult] {
         [
-            try writeDefaultConfig(overwrite: overwrite, audioSink: audioSink),
+            try writeDefaultConfig(overwrite: overwrite, audioSink: audioSink, lowLatency: lowLatency),
             try writeDefaultApps(overwrite: overwrite)
         ]
     }
@@ -88,7 +88,7 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
         SunshineConfigurationValidator.validateSunshineConfig(contents)
     }
 
-    public func renderDefaultSunshineConfiguration(audioSink: String?) -> String {
+    public func renderDefaultSunshineConfiguration(audioSink: String?, lowLatency: Bool) -> String {
         // If no sink is configured, OMIT the audio_sink line entirely instead of
         // emitting `audio_sink = ` with a trailing space — Sunshine's macOS
         // audio module parses that lone space as a device name `' '` and
@@ -98,10 +98,16 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
         let trimmedSink = audioSink?.trimmingCharacters(in: .whitespaces) ?? ""
         let sinkLine = trimmedSink.isEmpty ? nil : "audio_sink = \(trimmedSink)"
 
+        // Log level: drop to warning under low-latency mode so info-level
+        // chatter (every Web UI hit, every encoder probe, etc.) doesn't
+        // contend with the realtime path. Otherwise keep info — debugging
+        // is what most users need first.
+        let logLevel = lowLatency ? "warning" : "info"
+
         var lines: [String] = [
             "sunshine_name = MacStream Host",
             "locale = pt_BR",
-            "min_log_level = info",
+            "min_log_level = \(logLevel)",
             "system_tray = disabled",
             "",
             "keyboard = enabled",
@@ -121,9 +127,30 @@ public final class DefaultConfigurationManager: ConfigurationManaging {
             "upnp = disabled",
             "address_family = ipv4",
             "port = 47989",
-            "origin_web_ui_allowed = pc",
-            ""
+            "origin_web_ui_allowed = pc"
         ])
+
+        if lowLatency {
+            // Low-latency profile, intended for LAN streaming. The two
+            // knobs that move the needle on Apple Silicon:
+            //   - `fec_percentage = 0`: Forward Error Correction adds
+            //     a fixed-percentage overhead of redundant packets on
+            //     every frame. On LAN packet loss is near-zero, so the
+            //     redundancy is wasted bandwidth + serialization time.
+            //   - `min_threads = 4`: more encoder worker threads ⇒
+            //     less head-of-line blocking on the encode queue.
+            // On lossy networks (Wi-Fi spam, Tailscale over Internet),
+            // disabling FEC trades latency for stutter on packet loss.
+            // The Settings UI surfaces the trade-off explicitly.
+            lines.append(contentsOf: [
+                "",
+                "# Low-latency profile (LAN-optimized)",
+                "fec_percentage = 0",
+                "min_threads = 4"
+            ])
+        }
+
+        lines.append("")
         return lines.joined(separator: "\n")
     }
 
