@@ -11,22 +11,47 @@ import IOKit
 /// the Mac. Sidecar / AirPlay displays are skipped because their "brightness"
 /// can affect the framebuffer that's transmitted to the iPad.
 ///
-/// Three private/legacy mechanisms are tried in order:
+/// Three mechanisms are tried per display in order:
 ///
-/// 1. `DisplayServicesSetBrightness` (private framework on macOS 13+)
-/// 2. `IODisplaySetFloatParameter` with `kIODisplayBrightnessKey` (legacy IOKit, still works)
+/// 1. `DisplayServicesSetBrightness` (private framework on macOS 13+) — works
+///    on built-in Apple panels (Retina, Studio Display, XDR).
+/// 2. `IODisplaySetFloatParameter` with `kIODisplayBrightnessKey` (legacy IOKit).
+/// 3. `CGSetDisplayTransferByFormula(displayID, 0,0,0, 0,0,0, 0,0,0)` — gamma
+///    blackout. The fallback for external monitors that don't expose
+///    DDC/CI brightness control. Gamma is applied per-display by the GPU
+///    AFTER the framebuffer, BEFORE the panel, so the captured framebuffer
+///    that Moonlight reads stays untouched. The local LG / Dell / etc.
+///    monitor physically goes black.
 ///
 /// We **never** fall back to an NSWindow blackout because that overlay leaks
-/// into ScreenCaptureKit and therefore into the Moonlight feed. If both
+/// into ScreenCaptureKit and therefore into the Moonlight feed. If all
 /// methods fail, `dimResult` reports it so the UI can warn the user instead
 /// of silently doing the wrong thing.
 public struct DisplayDimResult {
-    public enum Method: String { case displayServices, ioKit, none }
+    public enum Method: String { case displayServices, ioKit, gammaBlackout, none }
 
     public var dimmedDisplays: [CGDirectDisplayID]
     public var skippedNonBuiltIn: [CGDirectDisplayID]
     public var failedDisplays: [CGDirectDisplayID]
     public var methodUsed: Method
+    /// Per-display method actually used. Useful so the UI can explain to
+    /// the user "Built-in escurecido via DisplayServices, LG ULTRAWIDE
+    /// via gamma blackout".
+    public var perDisplayMethods: [CGDirectDisplayID: Method]
+
+    public init(
+        dimmedDisplays: [CGDirectDisplayID] = [],
+        skippedNonBuiltIn: [CGDirectDisplayID] = [],
+        failedDisplays: [CGDirectDisplayID] = [],
+        methodUsed: Method = .none,
+        perDisplayMethods: [CGDirectDisplayID: Method] = [:]
+    ) {
+        self.dimmedDisplays = dimmedDisplays
+        self.skippedNonBuiltIn = skippedNonBuiltIn
+        self.failedDisplays = failedDisplays
+        self.methodUsed = methodUsed
+        self.perDisplayMethods = perDisplayMethods
+    }
 
     public var didDimAny: Bool { dimmedDisplays.isEmpty == false }
     public var summary: String {
@@ -36,14 +61,32 @@ public struct DisplayDimResult {
             }
             return "Nenhum display físico interno escurecido (skipados: \(skippedNonBuiltIn.count))."
         }
-        let method = methodUsed.rawValue
         let displaysWord = dimmedDisplays.count == 1 ? "display" : "displays"
-        return "\(dimmedDisplays.count) \(displaysWord) escurecido via \(method)."
+        // Aggregate method tally for the summary so the user sees e.g.
+        // "2 displays escurecidos (1 via brightness, 1 via gammaBlackout)".
+        var counts: [Method: Int] = [:]
+        for method in perDisplayMethods.values {
+            counts[method, default: 0] += 1
+        }
+        if counts.count <= 1 {
+            return "\(dimmedDisplays.count) \(displaysWord) escurecido via \(methodUsed.rawValue)."
+        }
+        let breakdown = counts
+            .map { "\($0.value) \($0.key.rawValue)" }
+            .sorted()
+            .joined(separator: ", ")
+        return "\(dimmedDisplays.count) \(displaysWord) escurecidos (\(breakdown))."
     }
 }
 
 final class DisplayBrightnessController {
     private var snapshots: [CGDirectDisplayID: (Float, DisplayDimResult.Method)] = [:]
+    /// Displays whose gamma we zeroed and must restore via
+    /// `CGDisplayRestoreColorSyncSettings` on unlock. Tracked separately
+    /// from `snapshots` because gamma doesn't have a per-display "previous
+    /// value" we can read — the OS restore call resets all displays to
+    /// their calibrated baselines in one shot.
+    private var gammaBlackedOutDisplays: Set<CGDirectDisplayID> = []
     private let displayServices = DisplayServicesBridge()
     private let ioKit = IOKitBrightnessBridge()
 
@@ -53,6 +96,7 @@ final class DisplayBrightnessController {
         var failed: [CGDirectDisplayID] = []
         var skipped: [CGDirectDisplayID] = []
         var effectiveMethod: DisplayDimResult.Method = .none
+        var perDisplayMethods: [CGDirectDisplayID: DisplayDimResult.Method] = [:]
 
         for displayID in activeDisplays() {
             guard CGDisplayIsBuiltin(displayID) != 0 || CGDisplayIsOnline(displayID) != 0 else {
@@ -66,10 +110,21 @@ final class DisplayBrightnessController {
 
             if tryDim(displayID: displayID, using: .displayServices) {
                 dimmed.append(displayID)
-                effectiveMethod = .displayServices
+                perDisplayMethods[displayID] = .displayServices
+                if effectiveMethod == .none { effectiveMethod = .displayServices }
             } else if tryDim(displayID: displayID, using: .ioKit) {
                 dimmed.append(displayID)
+                perDisplayMethods[displayID] = .ioKit
                 if effectiveMethod == .none { effectiveMethod = .ioKit }
+            } else if tryGammaBlackout(displayID: displayID) {
+                // Tertiary path for displays that don't accept brightness
+                // control from any of the OS APIs — typically external
+                // monitors without a DDC/CI helper installed. Gamma is
+                // applied per-display by the GPU after the framebuffer,
+                // so this stays invisible to ScreenCaptureKit.
+                dimmed.append(displayID)
+                perDisplayMethods[displayID] = .gammaBlackout
+                if effectiveMethod == .none { effectiveMethod = .gammaBlackout }
             } else {
                 failed.append(displayID)
             }
@@ -79,7 +134,8 @@ final class DisplayBrightnessController {
             dimmedDisplays: dimmed,
             skippedNonBuiltIn: skipped,
             failedDisplays: failed,
-            methodUsed: effectiveMethod
+            methodUsed: effectiveMethod,
+            perDisplayMethods: perDisplayMethods
         )
     }
 
@@ -91,11 +147,21 @@ final class DisplayBrightnessController {
                 _ = displayServices.setBrightness(for: displayID, value: value)
             case .ioKit:
                 _ = ioKit.setBrightness(for: displayID, value: value)
-            case .none:
+            case .gammaBlackout, .none:
                 break
             }
         }
         snapshots.removeAll()
+
+        // CGDisplayRestoreColorSyncSettings() is a single global call that
+        // restores every display's gamma to the user's calibrated profile.
+        // We only invoke it when we actually touched at least one display,
+        // to avoid the unnecessary side-effect of overriding any other
+        // app's gamma settings (rare but possible).
+        if !gammaBlackedOutDisplays.isEmpty {
+            CGDisplayRestoreColorSyncSettings()
+            gammaBlackedOutDisplays.removeAll()
+        }
     }
 
     private func tryDim(displayID: CGDirectDisplayID, using method: DisplayDimResult.Method) -> Bool {
@@ -115,9 +181,35 @@ final class DisplayBrightnessController {
                 snapshots[displayID] = (current, .ioKit)
             }
             return true
-        case .none:
+        case .gammaBlackout, .none:
+            // gammaBlackout has its own dedicated entry point below;
+            // .none never reaches here.
             return false
         }
+    }
+
+    /// Forces this display to render solid black by zeroing every gamma
+    /// channel (R, G, B). Returns true on success. The change persists
+    /// until `CGDisplayRestoreColorSyncSettings()` is called or the
+    /// display is unplugged.
+    ///
+    /// CGSetDisplayTransferByFormula(displayID, redMin, redMax, redGamma,
+    /// greenMin, greenMax, greenGamma, blueMin, blueMax, blueGamma).
+    /// Passing every parameter as 0 produces a constant-zero transfer
+    /// curve — the GPU sends black to the panel regardless of what was
+    /// drawn into the framebuffer.
+    private func tryGammaBlackout(displayID: CGDirectDisplayID) -> Bool {
+        let status = CGSetDisplayTransferByFormula(
+            displayID,
+            0, 0, 0,
+            0, 0, 0,
+            0, 0, 0
+        )
+        guard status == .success else {
+            return false
+        }
+        gammaBlackedOutDisplays.insert(displayID)
+        return true
     }
 
     private func activeDisplays() -> [CGDirectDisplayID] {
