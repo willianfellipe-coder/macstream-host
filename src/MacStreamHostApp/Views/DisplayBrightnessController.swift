@@ -90,8 +90,12 @@ final class DisplayBrightnessController {
     private let displayServices = DisplayServicesBridge()
     private let ioKit = IOKitBrightnessBridge()
 
+    /// Dims every active physical display except `keepLitDisplayID` (when
+    /// provided). The kept-lit display is where the dashboard / unlock
+    /// UI lives — without it the user has no visible surface to act on
+    /// once every framebuffer goes to black.
     @discardableResult
-    func dimAllDisplays() -> DisplayDimResult {
+    func dimAllDisplays(except keepLitDisplayID: CGDirectDisplayID? = nil) -> DisplayDimResult {
         var dimmed: [CGDirectDisplayID] = []
         var failed: [CGDirectDisplayID] = []
         var skipped: [CGDirectDisplayID] = []
@@ -99,6 +103,13 @@ final class DisplayBrightnessController {
         var perDisplayMethods: [CGDirectDisplayID: DisplayDimResult.Method] = [:]
 
         for displayID in activeDisplays() {
+            if let keepLitDisplayID, displayID == keepLitDisplayID {
+                // The display hosting the unlock UI must stay lit so the
+                // user can actually click "Desbloquear". We still count
+                // it as "skipped" so the summary tells the user why.
+                skipped.append(displayID)
+                continue
+            }
             guard CGDisplayIsBuiltin(displayID) != 0 || CGDisplayIsOnline(displayID) != 0 else {
                 skipped.append(displayID)
                 continue
@@ -108,24 +119,30 @@ final class DisplayBrightnessController {
                 continue
             }
 
-            if tryDim(displayID: displayID, using: .displayServices) {
-                dimmed.append(displayID)
-                perDisplayMethods[displayID] = .displayServices
-                if effectiveMethod == .none { effectiveMethod = .displayServices }
-            } else if tryDim(displayID: displayID, using: .ioKit) {
-                dimmed.append(displayID)
-                perDisplayMethods[displayID] = .ioKit
-                if effectiveMethod == .none { effectiveMethod = .ioKit }
-            } else if tryGammaBlackout(displayID: displayID) {
-                // Tertiary path for displays that don't accept brightness
-                // control from any of the OS APIs — typically external
-                // monitors without a DDC/CI helper installed. Gamma is
-                // applied per-display by the GPU after the framebuffer,
-                // so this stays invisible to ScreenCaptureKit.
-                dimmed.append(displayID)
-                perDisplayMethods[displayID] = .gammaBlackout
-                if effectiveMethod == .none { effectiveMethod = .gammaBlackout }
-            } else {
+            let order = dimOrder(for: displayID)
+            var success = false
+            for method in order {
+                switch method {
+                case .displayServices, .ioKit:
+                    if tryDim(displayID: displayID, using: method) {
+                        dimmed.append(displayID)
+                        perDisplayMethods[displayID] = method
+                        if effectiveMethod == .none { effectiveMethod = method }
+                        success = true
+                    }
+                case .gammaBlackout:
+                    if tryGammaBlackout(displayID: displayID) {
+                        dimmed.append(displayID)
+                        perDisplayMethods[displayID] = .gammaBlackout
+                        if effectiveMethod == .none { effectiveMethod = .gammaBlackout }
+                        success = true
+                    }
+                case .none:
+                    break
+                }
+                if success { break }
+            }
+            if !success {
                 failed.append(displayID)
             }
         }
@@ -137,6 +154,25 @@ final class DisplayBrightnessController {
             methodUsed: effectiveMethod,
             perDisplayMethods: perDisplayMethods
         )
+    }
+
+    /// Picks the dim-method priority order per display. Built-in Apple
+    /// panels respond reliably to the brightness APIs (the kernel
+    /// controls the LCD backlight), so we prefer that path because it's
+    /// fully reversible without touching the system-wide ColorSync
+    /// settings. External monitors return `kIOReturnSuccess` from the
+    /// brightness APIs even when they ignore the command — that's why
+    /// the LG ULTRAWIDE stayed lit in the previous build despite our
+    /// "added gamma fallback". To make external dims actually take
+    /// effect, we put `gammaBlackout` first for non-builtin displays.
+    /// The brightness paths remain as last-resort tail-fallbacks so
+    /// installations with DDC/CI helpers (MonitorControl, etc.) get
+    /// the most aggressive coverage possible.
+    private func dimOrder(for displayID: CGDirectDisplayID) -> [DisplayDimResult.Method] {
+        if CGDisplayIsBuiltin(displayID) != 0 {
+            return [.displayServices, .ioKit, .gammaBlackout]
+        }
+        return [.gammaBlackout, .displayServices, .ioKit]
     }
 
     func restoreAllDisplays() {

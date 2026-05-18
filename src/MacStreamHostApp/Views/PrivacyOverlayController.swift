@@ -25,36 +25,51 @@ final class PrivacyOverlayController {
 
     var lastDimSummary: String? { lastResult?.summary }
 
-    /// Drops every built-in physical display to brightness 0 so the local
+    /// Drops every physical display except the one hosting the dashboard
+    /// to brightness 0 (built-in) or zero gamma (external), so the local
     /// viewer goes dark while the framebuffer continues to be produced
-    /// normally — Moonlight keeps seeing the live desktop and the remote user
-    /// can keep working through the Mac. Sidecar/AirPlay displays are skipped
-    /// because dimming a wireless display can affect its framebuffer. When the
-    /// caller passes `suppressPanel: true` (because a Moonlight session is
-    /// active), we deliberately skip the floating unlock panel: even with
-    /// `sharingType = .none`, ScreenCaptureKit on macOS Sequoia still leaks
-    /// the panel into the captured frame and the panel intercepts forwarded
-    /// remote input. In that case the remote user can unlock through the menu
-    /// bar instead.
+    /// normally — Moonlight keeps seeing the live desktop and the remote
+    /// user can keep working through the Mac. The dashboard's display
+    /// stays lit so the floating unlock panel (and the dashboard "Bloquear"
+    /// button) remain visible to the local user; otherwise gamma=0 / brightness=0
+    /// would also hide the unlock UI itself.
+    ///
+    /// Sidecar/AirPlay displays are skipped because dimming a wireless
+    /// display can affect its framebuffer. When the caller passes
+    /// `suppressPanel: true` (because a Moonlight session is active), we
+    /// deliberately skip the floating unlock panel: even with
+    /// `sharingType = .none`, ScreenCaptureKit on macOS Sequoia still
+    /// leaks the panel into the captured frame and the panel intercepts
+    /// forwarded remote input. In that case the remote user can unlock
+    /// through the menu bar instead.
     func show(suppressPanel: Bool = false) {
         guard unlockPanel == nil else { return }
 
-        let result = brightness.dimAllDisplays()
+        // Pick the display we keep lit so the unlock UI stays visible to
+        // the local user. Preference order:
+        //   1. The display containing the currently-key (focused) window
+        //   2. The display containing any visible MacStream main window
+        //   3. NSScreen.main (the menu-bar screen)
+        let hostScreen = interactiveScreen() ?? NSScreen.main
+        let keepLitDisplayID = hostScreen
+            .flatMap { displayID(for: $0) }
+
+        let result = brightness.dimAllDisplays(except: keepLitDisplayID)
         lastResult = result
         onDimResult(result)
 
-        if !suppressPanel, let mainScreen = NSScreen.main {
+        if !suppressPanel, let panelScreen = hostScreen {
             let panelSize = NSSize(width: 380, height: 220)
             let origin = NSPoint(
-                x: mainScreen.frame.midX - panelSize.width / 2,
-                y: mainScreen.frame.midY - panelSize.height / 2
+                x: panelScreen.frame.midX - panelSize.width / 2,
+                y: panelScreen.frame.midY - panelSize.height / 2
             )
             let panel = KeyableBorderlessWindow(
                 contentRect: NSRect(origin: origin, size: panelSize),
                 styleMask: .borderless,
                 backing: .buffered,
                 defer: false,
-                screen: mainScreen
+                screen: panelScreen
             )
             panel.level = .screenSaver
             panel.backgroundColor = .clear
@@ -81,6 +96,32 @@ final class PrivacyOverlayController {
         }
 
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Returns the screen the user is actively interacting with, falling
+    /// through a priority chain: key window → main window → any visible
+    /// main window → nil. The lock UX positions the unlock panel here
+    /// and skips this screen when dimming the other displays.
+    private func interactiveScreen() -> NSScreen? {
+        if let key = NSApp.keyWindow, let screen = key.screen { return screen }
+        if let main = NSApp.mainWindow, let screen = main.screen { return screen }
+        if let any = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }),
+           let screen = any.screen {
+            return screen
+        }
+        return NSScreen.main
+    }
+
+    /// Extracts the `CGDirectDisplayID` from an `NSScreen` so we can
+    /// pass it down to the brightness controller. The key
+    /// "NSScreenNumber" is the documented way to retrieve the
+    /// underlying displayID for an NSScreen on macOS.
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        guard let value = screen.deviceDescription[key] as? NSNumber else {
+            return nil
+        }
+        return CGDirectDisplayID(value.uint32Value)
     }
 
     func hide() {
