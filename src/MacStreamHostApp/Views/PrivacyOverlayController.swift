@@ -50,16 +50,23 @@ final class PrivacyOverlayController {
         //   1. The display containing the currently-key (focused) window
         //   2. The display containing any visible MacStream main window
         //   3. NSScreen.main (the menu-bar screen)
+        //
+        // When `suppressPanel = true` there is no floating unlock panel
+        // to keep visible — the engine is actively streaming and the
+        // local user is using the iPad. In that mode every display
+        // gets a chance to dim (within the streaming-safe knobs), and
+        // unlocking is routed through the menu bar.
         let hostScreen = interactiveScreen() ?? NSScreen.main
-        let keepLitDisplayID = hostScreen
-            .flatMap { displayID(for: $0) }
+        let keepLitDisplayID = suppressPanel
+            ? nil
+            : hostScreen.flatMap { displayID(for: $0) }
 
         // The Sunshine engine captures `CGMainDisplayID()` by default.
-        // Skipping it from the dim guarantees the remote feed stays
-        // intact regardless of which dim method runs on the OTHER
-        // panels. `suppressPanel` is true whenever the engine reports a
-        // live Moonlight session, which is also when we promise
-        // "remote stream never breaks from a host-side action".
+        // Telling the dim controller about it means gamma blackout is
+        // skipped specifically for that display while the brightness
+        // paths (panel backlight only — invisible to ScreenCaptureKit)
+        // still run. So the built-in MacBook lid still goes dark while
+        // the remote feed keeps painting normally.
         let mainDisplay = CGMainDisplayID()
 
         let result = brightness.dimAllDisplays(

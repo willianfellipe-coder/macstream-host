@@ -125,13 +125,6 @@ final class DisplayBrightnessController {
                 skipped.append(displayID)
                 continue
             }
-            // Never touch the display Sunshine is feeding into the
-            // Moonlight stream. Gamma changes leak into the remote
-            // feed via ScreenCaptureKit in macOS 15+.
-            if let streamedDisplayID, displayID == streamedDisplayID {
-                skipped.append(displayID)
-                continue
-            }
             guard CGDisplayIsBuiltin(displayID) != 0 || CGDisplayIsOnline(displayID) != 0 else {
                 skipped.append(displayID)
                 continue
@@ -141,7 +134,13 @@ final class DisplayBrightnessController {
                 continue
             }
 
-            let order = dimOrder(for: displayID, streamingActive: streamingActive)
+            // The display Sunshine is capturing only forbids gamma
+            // blackout (that's what leaks into the remote feed). The
+            // brightness paths control the panel backlight on a
+            // built-in screen — they're invisible to ScreenCaptureKit,
+            // so we can still apply them to the streamed display.
+            let forbidGamma = streamingActive || displayID == streamedDisplayID
+            let order = dimOrder(for: displayID, forbidGamma: forbidGamma)
             var success = false
             for method in order {
                 switch method {
@@ -187,28 +186,31 @@ final class DisplayBrightnessController {
     ///
     /// External monitors return `kIOReturnSuccess` from the brightness
     /// APIs even when they ignore the command (no DDC/CI helper), so
-    /// outside of an active streaming session we put `gammaBlackout`
-    /// first as the only reliably-effective path.
+    /// when gamma is allowed we put `gammaBlackout` first as the only
+    /// reliably-effective path.
     ///
-    /// During an active Moonlight session, gamma blackout is OFF
-    /// everywhere — even on the LG that we know wouldn't otherwise
-    /// dim. Gamma changes have been observed to corrupt SCStream
-    /// output AND to push the system cursor into our dim panel, which
-    /// the user perceives as a frozen mouse on the iPad. Brightness-
-    /// only mode means external panels won't physically dim during
-    /// the session; that's the lesser evil compared with stalling
-    /// remote input.
+    /// Gamma is forbidden in two cases:
+    ///   - `forbidGamma == true` (caller's choice)
+    ///   - on the display the engine is currently capturing into the
+    ///     Moonlight stream — ScreenCaptureKit samples post-gamma in
+    ///     some paths, corrupting the remote feed
+    /// During an active streaming session the caller passes
+    /// `forbidGamma = true` for every display: gamma changes ALSO
+    /// route the system cursor into invisible regions, which the user
+    /// perceives as a frozen mouse on the iPad. Brightness-only mode
+    /// means external panels without DDC/CI won't physically dim;
+    /// that's the lesser evil compared with stalling remote input.
     private func dimOrder(
         for displayID: CGDirectDisplayID,
-        streamingActive: Bool
+        forbidGamma: Bool
     ) -> [DisplayDimResult.Method] {
         if CGDisplayIsBuiltin(displayID) != 0 {
-            if streamingActive {
+            if forbidGamma {
                 return [.displayServices, .ioKit]
             }
             return [.displayServices, .ioKit, .gammaBlackout]
         }
-        if streamingActive {
+        if forbidGamma {
             return [.displayServices, .ioKit]
         }
         return [.gammaBlackout, .displayServices, .ioKit]
