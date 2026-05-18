@@ -4,6 +4,50 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Kill the ghost Dock icon (2026-05-18)
+
+User report: even with the dashboard closed, the Dock kept showing
+"MacStream Host". Investigation revealed the icon wasn't a pinned
+shortcut — it was a legitimate LaunchServices Dock entry owned by the
+two background processes (`macstream-agent` + `MacStreamEngine`) that
+share `Identifier=org.macstream.host` with the GUI bundle. Neither
+helper called `setActivationPolicy(.accessory)` at boot, so macOS
+grouped them under the parent bundle's Dock tile.
+
+Three concurrent fixes — none alone is enough, because any process
+claiming `.regular` policy under `org.macstream.host` keeps the Dock
+entry alive.
+
+- **`src/macstream-agent/main.swift`**: import AppKit and call
+  `NSApplication.shared.setActivationPolicy(.accessory)` as the very
+  first line of `main()`. The agent now disappears from the Dock and
+  the AppSwitcher.
+- **`scripts/embed_lsuielement.py`** (new): LIEF-based patcher that
+  injects a `__TEXT,__info_plist` Mach-O section with
+  `LSUIElement=true` and `CFBundleIdentifier=org.macstream.host`
+  into the engine binary. Idempotent. Invoked by `package_dmg.sh`
+  immediately after copying the engine into the bundle and before
+  the final `codesign --sign` (which seals the new section).
+  Requires `python3 -m pip install --user lief` on the build
+  machine; degrades gracefully with a warning otherwise.
+- **`src/MacStreamHostApp/MacStreamHostApp.swift`**:
+  `MacStreamAppDelegate` now returns false from
+  `applicationShouldTerminateAfterLastWindowClosed` (closing the
+  dashboard no longer quits the tray app) and, when
+  `startInBackground` is on, observes
+  `NSWindow.willCloseNotification` to demote the activation policy
+  back to `.accessory` after the last main window closes. So:
+  tray → "Abrir dashboard" → policy promotes to `.regular`,
+  Dock icon appears; close window → policy demotes to `.accessory`,
+  Dock icon disappears.
+
+Verification: `swift -e` enumerating `NSWorkspace.shared.runningApplications`
+now reports `activationPolicy = .accessory` for both helpers. The CGWindowList
+shows zero Dock tiles (layer 20) under any MacStream owner while the
+dashboard is closed. 135/135 tests still pass; 29/29 runtime validation
+still green.
+
+
 ### Accessibility recovery + stable codesign identity (2026-05-17)
 
 - **Stable self-signed identity:** `scripts/setup_local_codesign_identity.sh`

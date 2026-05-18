@@ -91,17 +91,27 @@ cp "$ROOT_DIR/UPSTREAMS.md" "$RESOURCES_DIR/UPSTREAMS.md"
 # the OS attributes its TCC calls to the parent bundle identity. The binary
 # uses @executable_path/../Frameworks/ and ../Resources/assets/ which resolve
 # to Contents/Frameworks/ and Contents/Resources/assets/ from this location.
-#
-# Known limitation: the engine appears in the Dock as a `.regular`
-# activation policy app even though it's headless. We tried wrapping
-# it with a Swift shim that called `setActivationPolicy(.accessory)`
-# before `execve` — but LaunchServices re-evaluates the policy from
-# the new Mach-O image after exec, so the override doesn't stick. The
-# permanent fix is to inject a `__TEXT,__info_plist` Mach-O section
-# with `LSUIElement=true` directly into the Sunshine binary using
-# LIEF (Python). Tracked as a polish item.
 cp "$SUNSHINE_STAGE_BIN" "$MACOS_DIR/$ENGINE_BIN_NAME"
 chmod 755 "$MACOS_DIR/$ENGINE_BIN_NAME"
+
+# Embed `LSUIElement=true` into the engine binary so macOS LaunchServices
+# treats it as an accessory process — no Dock icon. Without this the
+# engine claims the parent bundle's Dock entry under `org.macstream.host`
+# and the "ghost MacStream icon" appears even with the GUI fully closed.
+# Requires LIEF (`python3 -m pip install --user lief`). When LIEF is
+# missing we emit a warning and continue; the resulting bundle works,
+# the engine just stays in the Dock until LIEF is installed and the
+# bundle is rebuilt.
+#
+# Must run BEFORE the engine's final codesign because adding a Mach-O
+# section invalidates the existing signature.
+if command -v python3 >/dev/null 2>&1 && python3 -c "import lief" 2>/dev/null; then
+  echo "Embedding LSUIElement=true into the engine binary (LIEF)..."
+  python3 "$ROOT_DIR/scripts/embed_lsuielement.py" "$MACOS_DIR/$ENGINE_BIN_NAME"
+else
+  echo "WARNING: LIEF not installed — engine will appear in the Dock." >&2
+  echo "         Install once: python3 -m pip install --user lief" >&2
+fi
 
 if [[ -d "$SUNSHINE_STAGE_FRAMEWORKS" ]]; then
   shopt -s nullglob

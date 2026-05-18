@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import Foundation
 import MacStreamCore
 
 @main
 struct MacStreamAgent {
     static func main() async {
+        // Tell LaunchServices we're a background helper (no Dock icon,
+        // no AppSwitcher entry). Without this, macOS treats the agent
+        // as a regular .app — and because the agent and the MacStream
+        // Host GUI share `Identifier=org.macstream.host` (necessary
+        // for the TCC disclaim chain), LaunchServices groups the agent
+        // into the parent bundle's Dock entry. Result: the user sees
+        // a "ghost" MacStream Host icon in the Dock even with the GUI
+        // fully closed. Setting .accessory here suppresses that.
+        NSApplication.shared.setActivationPolicy(.accessory)
+
         let arguments = Array(CommandLine.arguments.dropFirst())
 
         if arguments.contains("--status") {

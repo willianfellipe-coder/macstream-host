@@ -9,6 +9,20 @@ chain stay stable across rebuilds and the TCC grants below survive
 `./scripts/package_dmg.sh` cycles. You only redo these steps after a
 fresh keychain wipe or a cert rotation.
 
+## Build dependency — LIEF (optional but recommended)
+
+The build pipeline patches the engine's Mach-O header to embed
+`LSUIElement=true`, suppressing the "ghost" Dock icon for the
+background processes. Install once on the build machine:
+
+```bash
+python3 -m pip install --user lief
+```
+
+Without LIEF the build still succeeds — `package_dmg.sh` emits a
+warning and the engine appears in the Dock until you install LIEF
+and rebuild.
+
 ## Why one TCC entry covers the whole bundle
 
 MacStream Host ships three Mach-O binaries inside the same `.app`:
