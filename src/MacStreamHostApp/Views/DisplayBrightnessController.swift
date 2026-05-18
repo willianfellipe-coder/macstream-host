@@ -90,12 +90,30 @@ final class DisplayBrightnessController {
     private let displayServices = DisplayServicesBridge()
     private let ioKit = IOKitBrightnessBridge()
 
-    /// Dims every active physical display except `keepLitDisplayID` (when
-    /// provided). The kept-lit display is where the dashboard / unlock
-    /// UI lives — without it the user has no visible surface to act on
-    /// once every framebuffer goes to black.
+    /// Dims every active physical display except those the caller flags
+    /// to keep lit:
+    ///   - `keepLitDisplayID`: the display hosting the dashboard / unlock
+    ///     panel. Without sparing it, the user can't see anything to act
+    ///     on once every framebuffer goes to black.
+    ///   - `streamedDisplayID`: the display Sunshine is capturing into the
+    ///     Moonlight stream. Applying gamma blackout here breaks the
+    ///     remote view (ScreenCaptureKit on macOS Sequoia samples
+    ///     post-gamma in several capture paths) and routes the cursor
+    ///     into the dim panel, which the user perceives as "mouse
+    ///     completely stuck on the iPad".
+    ///   - `streamingActive`: when an iPad client is actively connected,
+    ///     gamma blackout is BANNED on every display — even one we don't
+    ///     think is being streamed — because that's a categorical
+    ///     regression we cannot risk. External monitors that don't
+    ///     accept the brightness APIs end up in `failedDisplays`; the
+    ///     caller surfaces that to the user so they know to use a DDC/CI
+    ///     helper for those panels.
     @discardableResult
-    func dimAllDisplays(except keepLitDisplayID: CGDirectDisplayID? = nil) -> DisplayDimResult {
+    func dimAllDisplays(
+        except keepLitDisplayID: CGDirectDisplayID? = nil,
+        streamedDisplayID: CGDirectDisplayID? = nil,
+        streamingActive: Bool = false
+    ) -> DisplayDimResult {
         var dimmed: [CGDirectDisplayID] = []
         var failed: [CGDirectDisplayID] = []
         var skipped: [CGDirectDisplayID] = []
@@ -104,9 +122,13 @@ final class DisplayBrightnessController {
 
         for displayID in activeDisplays() {
             if let keepLitDisplayID, displayID == keepLitDisplayID {
-                // The display hosting the unlock UI must stay lit so the
-                // user can actually click "Desbloquear". We still count
-                // it as "skipped" so the summary tells the user why.
+                skipped.append(displayID)
+                continue
+            }
+            // Never touch the display Sunshine is feeding into the
+            // Moonlight stream. Gamma changes leak into the remote
+            // feed via ScreenCaptureKit in macOS 15+.
+            if let streamedDisplayID, displayID == streamedDisplayID {
                 skipped.append(displayID)
                 continue
             }
@@ -119,7 +141,7 @@ final class DisplayBrightnessController {
                 continue
             }
 
-            let order = dimOrder(for: displayID)
+            let order = dimOrder(for: displayID, streamingActive: streamingActive)
             var success = false
             for method in order {
                 switch method {
@@ -156,21 +178,38 @@ final class DisplayBrightnessController {
         )
     }
 
-    /// Picks the dim-method priority order per display. Built-in Apple
-    /// panels respond reliably to the brightness APIs (the kernel
-    /// controls the LCD backlight), so we prefer that path because it's
-    /// fully reversible without touching the system-wide ColorSync
-    /// settings. External monitors return `kIOReturnSuccess` from the
-    /// brightness APIs even when they ignore the command — that's why
-    /// the LG ULTRAWIDE stayed lit in the previous build despite our
-    /// "added gamma fallback". To make external dims actually take
-    /// effect, we put `gammaBlackout` first for non-builtin displays.
-    /// The brightness paths remain as last-resort tail-fallbacks so
-    /// installations with DDC/CI helpers (MonitorControl, etc.) get
-    /// the most aggressive coverage possible.
-    private func dimOrder(for displayID: CGDirectDisplayID) -> [DisplayDimResult.Method] {
+    /// Picks the dim-method priority order per display.
+    ///
+    /// Built-in Apple panels respond reliably to the brightness APIs
+    /// (the kernel controls the LCD backlight) so we always prefer that
+    /// path — fully reversible and panel-only, doesn't touch the
+    /// system-wide ColorSync state.
+    ///
+    /// External monitors return `kIOReturnSuccess` from the brightness
+    /// APIs even when they ignore the command (no DDC/CI helper), so
+    /// outside of an active streaming session we put `gammaBlackout`
+    /// first as the only reliably-effective path.
+    ///
+    /// During an active Moonlight session, gamma blackout is OFF
+    /// everywhere — even on the LG that we know wouldn't otherwise
+    /// dim. Gamma changes have been observed to corrupt SCStream
+    /// output AND to push the system cursor into our dim panel, which
+    /// the user perceives as a frozen mouse on the iPad. Brightness-
+    /// only mode means external panels won't physically dim during
+    /// the session; that's the lesser evil compared with stalling
+    /// remote input.
+    private func dimOrder(
+        for displayID: CGDirectDisplayID,
+        streamingActive: Bool
+    ) -> [DisplayDimResult.Method] {
         if CGDisplayIsBuiltin(displayID) != 0 {
+            if streamingActive {
+                return [.displayServices, .ioKit]
+            }
             return [.displayServices, .ioKit, .gammaBlackout]
+        }
+        if streamingActive {
+            return [.displayServices, .ioKit]
         }
         return [.gammaBlackout, .displayServices, .ioKit]
     }

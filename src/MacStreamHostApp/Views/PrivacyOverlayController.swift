@@ -54,7 +54,19 @@ final class PrivacyOverlayController {
         let keepLitDisplayID = hostScreen
             .flatMap { displayID(for: $0) }
 
-        let result = brightness.dimAllDisplays(except: keepLitDisplayID)
+        // The Sunshine engine captures `CGMainDisplayID()` by default.
+        // Skipping it from the dim guarantees the remote feed stays
+        // intact regardless of which dim method runs on the OTHER
+        // panels. `suppressPanel` is true whenever the engine reports a
+        // live Moonlight session, which is also when we promise
+        // "remote stream never breaks from a host-side action".
+        let mainDisplay = CGMainDisplayID()
+
+        let result = brightness.dimAllDisplays(
+            except: keepLitDisplayID,
+            streamedDisplayID: suppressPanel ? mainDisplay : nil,
+            streamingActive: suppressPanel
+        )
         lastResult = result
         onDimResult(result)
 
@@ -95,7 +107,16 @@ final class PrivacyOverlayController {
             unlockPanel = panel
         }
 
-        NSApp.activate(ignoringOtherApps: true)
+        // Only steal focus when we're actually showing a UI. With
+        // `suppressPanel = true` (active Moonlight session) we want the
+        // remote client to keep typing into whatever app they were
+        // using — pulling MacStream Host to the front would redirect
+        // keyboard events from `CGEventPost` into the dashboard window
+        // and the user perceives that as a frozen mouse + dead
+        // keyboard on the iPad.
+        if !suppressPanel {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     /// Returns the screen the user is actively interacting with, falling
