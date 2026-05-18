@@ -163,10 +163,33 @@ struct DashboardView: View {
                             Label("Parear dispositivo", systemImage: "ipad.and.arrow.forward")
                         }
 
-                        Button {
-                            Task { await appState.lockHostForPrivacy() }
-                        } label: {
-                            Label("Bloquear host", systemImage: "lock.display")
+                        if appState.privacyOverlayActive {
+                            // Lock is active. Reuse the same dismiss
+                            // action the tray uses so the two surfaces
+                            // stay consistent. When an app password is
+                            // configured the dismiss without a candidate
+                            // would just silently fail — disable the
+                            // inline button in that case and route the
+                            // user to the floating panel (which has the
+                            // password field).
+                            Button {
+                                _ = appState.dismissPrivacyOverlay(passwordCandidate: nil)
+                            } label: {
+                                Label("Desbloquear host", systemImage: "lock.open.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                            .disabled(appState.overlayUnlockRequiresPassword)
+                            .help(appState.overlayUnlockRequiresPassword
+                                  ? "Use o painel de desbloqueio para digitar a senha."
+                                  : "Restaura o brilho da(s) tela(s) deste Mac.")
+                        } else {
+                            Button {
+                                Task { await appState.lockHostForPrivacy() }
+                            } label: {
+                                Label("Bloquear host", systemImage: "lock.display")
+                            }
+                            .help("Escurece os displays físicos do Mac sem afetar o stream do Moonlight.")
                         }
 
                         Spacer()
