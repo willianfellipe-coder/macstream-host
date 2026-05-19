@@ -804,15 +804,53 @@ struct NetworkView: View {
         PageContainer(title: "Rede", subtitle: "Diagnóstico local de IP, portas do motor de streaming e orientação para VPN mesh.") {
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(appState.dashboard.networkStatus.localAddresses, id: \.self) { address in
-                        HStack {
-                            Label(address, systemImage: "network")
-                                .font(.system(.body, design: .monospaced))
-                            Spacer()
-                            Button {
-                                appState.copyPairingAddress(address)
-                            } label: {
-                                Label("Copiar", systemImage: "doc.on.doc")
+                    if appState.dashboard.networkStatus.hasOverlappingSubnets {
+                        Label(
+                            "Duas interfaces compartilham o mesmo subnet. Isso costuma quebrar a descoberta do Moonlight (roteamento ambíguo). Desative a interface secundária — geralmente um adaptador USB-Ethernet sem cabo conectado.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    let details = appState.dashboard.networkStatus.localAddressDetails
+                    if details.isEmpty {
+                        // Legacy fallback when the manager couldn't enrich
+                        // the entries (older builds, non-macOS).
+                        ForEach(appState.dashboard.networkStatus.localAddresses, id: \.self) { address in
+                            HStack {
+                                Label(address, systemImage: "network")
+                                    .font(.system(.body, design: .monospaced))
+                                Spacer()
+                                Button {
+                                    appState.copyPairingAddress(address)
+                                } label: {
+                                    Label("Copiar", systemImage: "doc.on.doc")
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(details, id: \.address) { entry in
+                            HStack(alignment: .firstTextBaseline) {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(entry.address)
+                                            .font(.system(.body, design: .monospaced))
+                                        Text(interfaceCaption(entry))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                } icon: {
+                                    Image(systemName: entry.isPrimary ? "checkmark.circle.fill" : "network")
+                                        .foregroundStyle(entry.isPrimary ? .green : .secondary)
+                                }
+                                Spacer()
+                                Button {
+                                    appState.copyPairingAddress(entry.address)
+                                } label: {
+                                    Label("Copiar", systemImage: "doc.on.doc")
+                                }
                             }
                         }
                     }
@@ -856,6 +894,20 @@ struct NetworkView: View {
                 }
             }
         }
+    }
+
+    private func interfaceCaption(_ entry: NetworkLocalAddress) -> String {
+        var parts: [String] = []
+        if let friendly = entry.friendlyName, !friendly.isEmpty {
+            parts.append(friendly)
+        }
+        if !entry.interfaceName.isEmpty {
+            parts.append(entry.interfaceName)
+        }
+        if entry.isPrimary {
+            parts.append("recomendado")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

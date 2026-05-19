@@ -173,14 +173,66 @@ final class NetworkDiagnosticsManagerTests: XCTestCase {
 
         XCTAssertNil(address)
     }
+
+    func testRunDiagnosticsMarksPrimaryInterfaceWhenRouteIsKnown() async {
+        let provider = FakeNetworkAddressProvider(
+            addresses: ["192.168.68.125", "192.168.68.145"],
+            details: [
+                NetworkLocalAddress(address: "192.168.68.125", interfaceName: "en0", friendlyName: "Wi-Fi"),
+                NetworkLocalAddress(address: "192.168.68.145", interfaceName: "en16", friendlyName: "USB Ethernet")
+            ],
+            primary: "en0"
+        )
+        let manager = DefaultNetworkDiagnosticsManager(
+            addressProvider: provider,
+            portChecker: FakeNetworkPortChecker(statuses: [:]),
+            tailscaleProvider: FakeTailscaleAddressProvider(address: nil),
+            sunshinePorts: []
+        )
+
+        let result = await manager.runDiagnostics()
+
+        XCTAssertEqual(result.localAddressDetails.count, 2)
+        // Primary entry should be first in the sorted projection.
+        XCTAssertEqual(result.localAddressDetails.first?.interfaceName, "en0")
+        XCTAssertTrue(result.localAddressDetails.first?.isPrimary ?? false)
+        XCTAssertFalse(result.localAddressDetails.last?.isPrimary ?? true)
+        // And the legacy `.localAddresses` projection follows the same order.
+        XCTAssertEqual(result.localAddresses, ["192.168.68.125", "192.168.68.145"])
+    }
+
+    func testOverlappingSubnetsAreDetectedFromAddressList() {
+        let result = NetworkDiagnosticResult(
+            localAddresses: ["192.168.68.125", "192.168.68.145"],
+            portChecks: []
+        )
+        XCTAssertTrue(result.hasOverlappingSubnets)
+
+        let clean = NetworkDiagnosticResult(
+            localAddresses: ["192.168.68.125", "10.0.0.5"],
+            portChecks: []
+        )
+        XCTAssertFalse(clean.hasOverlappingSubnets)
+    }
 }
 
 private struct FakeNetworkAddressProvider: NetworkAddressProviding {
     let addresses: [String]
+    var details: [NetworkLocalAddress] = []
+    var primary: String? = nil
 
     func localAddresses() -> [String] {
         addresses
     }
+
+    func localAddressDetails() -> [NetworkLocalAddress] {
+        if details.isEmpty {
+            return addresses.map { NetworkLocalAddress(address: $0, interfaceName: "") }
+        }
+        return details
+    }
+
+    func primaryInterfaceName() -> String? { primary }
 }
 
 private struct FakeNetworkPortChecker: NetworkPortChecking {

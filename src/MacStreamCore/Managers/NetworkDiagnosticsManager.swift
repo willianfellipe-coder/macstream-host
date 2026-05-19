@@ -4,10 +4,27 @@ import Foundation
 
 #if os(macOS)
 import Darwin
+import SystemConfiguration
 #endif
 
 public protocol NetworkAddressProviding {
     func localAddresses() -> [String]
+    /// Rich enumeration that annotates each address with its interface
+    /// name + a user-facing label (e.g. "Wi-Fi"). Default implementation
+    /// derives this from the plain `localAddresses()` so existing test
+    /// doubles compile without change.
+    func localAddressDetails() -> [NetworkLocalAddress]
+    /// BSD name of the interface backing the IPv4 default route, when
+    /// available. The manager uses this to mark one address as
+    /// "recomendado" in the UI.
+    func primaryInterfaceName() -> String?
+}
+
+public extension NetworkAddressProviding {
+    func localAddressDetails() -> [NetworkLocalAddress] {
+        localAddresses().map { NetworkLocalAddress(address: $0, interfaceName: "") }
+    }
+    func primaryInterfaceName() -> String? { nil }
 }
 
 public protocol NetworkPortChecking {
@@ -60,7 +77,22 @@ public final class DefaultNetworkDiagnosticsManager: NetworkDiagnosticsManaging 
     }
 
     public func runDiagnostics() async -> NetworkDiagnosticResult {
-        let localAddresses = addressProvider.localAddresses()
+        var details = addressProvider.localAddressDetails()
+        if let primary = addressProvider.primaryInterfaceName() {
+            details = details.map { entry in
+                var copy = entry
+                copy.isPrimary = (entry.interfaceName == primary)
+                return copy
+            }
+        }
+        // The plain string list stays as the legacy projection — same
+        // ordering as `details` so downstream consumers that still treat
+        // `.first` as "the address" pick the primary when available.
+        details.sort { lhs, rhs in
+            if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary && !rhs.isPrimary }
+            return lhs.address < rhs.address
+        }
+        let localAddresses = details.map(\.address)
         let tailscaleAddress = await tailscaleProvider.tailscaleAddress()
         var portChecks: [NetworkPortCheck] = []
 
@@ -79,6 +111,7 @@ public final class DefaultNetworkDiagnosticsManager: NetworkDiagnosticsManaging 
 
         return NetworkDiagnosticResult(
             localAddresses: localAddresses,
+            localAddressDetails: details,
             tailscaleAddress: tailscaleAddress,
             portChecks: portChecks,
             firewallStatus: .unknown
@@ -107,7 +140,12 @@ public final class POSIXNetworkAddressProvider: NetworkAddressProviding {
     public init() {}
 
     public func localAddresses() -> [String] {
-        var addresses: [String] = []
+        localAddressDetails().map(\.address)
+    }
+
+    public func localAddressDetails() -> [NetworkLocalAddress] {
+        var entries: [NetworkLocalAddress] = []
+        var seen: Set<String> = []
         var interfacePointer: UnsafeMutablePointer<ifaddrs>?
 
         guard getifaddrs(&interfacePointer) == 0, let firstInterface = interfacePointer else {
@@ -116,6 +154,7 @@ public final class POSIXNetworkAddressProvider: NetworkAddressProviding {
 
         defer { freeifaddrs(interfacePointer) }
 
+        let friendlyNames = friendlyInterfaceNames()
         var cursor: UnsafeMutablePointer<ifaddrs>? = firstInterface
         while let interface = cursor?.pointee {
             defer { cursor = interface.ifa_next }
@@ -132,12 +171,84 @@ public final class POSIXNetworkAddressProvider: NetworkAddressProviding {
                 continue
             }
 
-            if let ipAddress = stringAddress(from: address), shouldInclude(ipAddress) {
-                addresses.append(ipAddress)
+            guard let ipAddress = stringAddress(from: address), shouldInclude(ipAddress) else {
+                continue
             }
+
+            let bsdName = String(cString: interface.ifa_name)
+            let key = "\(bsdName)|\(ipAddress)"
+            if seen.contains(key) { continue }
+            seen.insert(key)
+
+            entries.append(
+                NetworkLocalAddress(
+                    address: ipAddress,
+                    interfaceName: bsdName,
+                    friendlyName: friendlyNames[bsdName]
+                )
+            )
         }
 
-        return Array(Set(addresses)).sorted()
+        entries.sort { lhs, rhs in
+            if lhs.interfaceName != rhs.interfaceName { return lhs.interfaceName < rhs.interfaceName }
+            return lhs.address < rhs.address
+        }
+        return entries
+    }
+
+    public func primaryInterfaceName() -> String? {
+        // Parse `route -n get default` — the canonical macOS way to find
+        // the interface backing the default IPv4 route. Used by the
+        // dashboard to mark one entry as "recomendado".
+        let task = Process()
+        task.launchPath = "/sbin/route"
+        task.arguments = ["-n", "get", "default"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("interface:") {
+                let parts = trimmed.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return parts[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    /// BSD name → user-facing label (e.g. `en0` → "Wi-Fi"). Reads the
+    /// macOS Network preferences via SystemConfiguration so the labels
+    /// match what the user sees in System Settings → Network. Returns
+    /// an empty map if SC is unavailable (non-macOS, sandboxed builds).
+    private func friendlyInterfaceNames() -> [String: String] {
+        #if os(macOS)
+        guard let prefs = SCPreferencesCreate(nil, "MacStreamHost" as CFString, nil) else { return [:] }
+        guard let services = SCNetworkServiceCopyAll(prefs) as? [SCNetworkService] else { return [:] }
+        var map: [String: String] = [:]
+        for service in services {
+            guard let iface = SCNetworkServiceGetInterface(service),
+                  let bsdName = SCNetworkInterfaceGetBSDName(iface) as String? else {
+                continue
+            }
+            if let userVisible = SCNetworkServiceGetName(service) as String?, !userVisible.isEmpty {
+                map[bsdName] = userVisible
+            } else if let typeName = SCNetworkInterfaceGetLocalizedDisplayName(iface) as String? {
+                map[bsdName] = typeName
+            }
+        }
+        return map
+        #else
+        return [:]
+        #endif
     }
 
     private func stringAddress(from address: UnsafePointer<sockaddr>) -> String? {

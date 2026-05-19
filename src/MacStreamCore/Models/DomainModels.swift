@@ -1054,22 +1054,112 @@ public struct NetworkPortCheck: Identifiable, Codable, Equatable {
     }
 }
 
+/// Rich descriptor for a local IP address — couples the IP to the
+/// physical interface it lives on and to a user-visible label (e.g.
+/// "Wi-Fi", "USB 10/100/1000 LAN"). Used by the dashboard so the user
+/// can tell at a glance which IP the Moonlight client should target.
+/// Crucial when the Mac has multiple interfaces sharing a subnet — a
+/// USB-Ethernet adapter with no link still gets a DHCP lease and the
+/// raw IP list alone can't distinguish it from the real Wi-Fi route.
+public struct NetworkLocalAddress: Codable, Equatable {
+    public var address: String
+    public var interfaceName: String
+    public var friendlyName: String?
+    /// True when this is the interface backing the IPv4 default route.
+    /// Dashboard highlights it as the recommended IP to type into
+    /// Moonlight when discovery doesn't find the host automatically.
+    public var isPrimary: Bool
+
+    public init(
+        address: String,
+        interfaceName: String,
+        friendlyName: String? = nil,
+        isPrimary: Bool = false
+    ) {
+        self.address = address
+        self.interfaceName = interfaceName
+        self.friendlyName = friendlyName
+        self.isPrimary = isPrimary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case address, interfaceName, friendlyName, isPrimary
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        address = try container.decode(String.self, forKey: .address)
+        interfaceName = try container.decodeIfPresent(String.self, forKey: .interfaceName) ?? ""
+        friendlyName = try container.decodeIfPresent(String.self, forKey: .friendlyName)
+        isPrimary = try container.decodeIfPresent(Bool.self, forKey: .isPrimary) ?? false
+    }
+
+    /// User-facing one-line description. Examples:
+    ///   "192.168.68.125 (Wi-Fi) — recomendado"
+    ///   "192.168.68.145 (USB 10/100/1000 LAN)"
+    public var displayLine: String {
+        var line = address
+        if let friendlyName, !friendlyName.isEmpty {
+            line += " (\(friendlyName))"
+        } else if !interfaceName.isEmpty {
+            line += " (\(interfaceName))"
+        }
+        if isPrimary {
+            line += " — recomendado"
+        }
+        return line
+    }
+}
+
 public struct NetworkDiagnosticResult: Codable, Equatable {
     public var localAddresses: [String]
+    /// Same addresses as `localAddresses` but annotated with interface
+    /// metadata. Empty when the underlying provider only delivers raw
+    /// strings (legacy callers, tests). When populated, dashboard +
+    /// menubar should prefer rendering this over the bare list.
+    public var localAddressDetails: [NetworkLocalAddress]
     public var tailscaleAddress: String?
     public var portChecks: [NetworkPortCheck]
     public var firewallStatus: CheckStatus
 
     public init(
         localAddresses: [String],
+        localAddressDetails: [NetworkLocalAddress] = [],
         tailscaleAddress: String? = nil,
         portChecks: [NetworkPortCheck],
         firewallStatus: CheckStatus = .unknown
     ) {
         self.localAddresses = localAddresses
+        self.localAddressDetails = localAddressDetails
         self.tailscaleAddress = tailscaleAddress
         self.portChecks = portChecks
         self.firewallStatus = firewallStatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case localAddresses, localAddressDetails, tailscaleAddress, portChecks, firewallStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        localAddresses = try container.decode([String].self, forKey: .localAddresses)
+        localAddressDetails = try container.decodeIfPresent([NetworkLocalAddress].self, forKey: .localAddressDetails) ?? []
+        tailscaleAddress = try container.decodeIfPresent(String.self, forKey: .tailscaleAddress)
+        portChecks = try container.decode([NetworkPortCheck].self, forKey: .portChecks)
+        firewallStatus = try container.decodeIfPresent(CheckStatus.self, forKey: .firewallStatus) ?? .unknown
+    }
+
+    /// True when two or more local addresses live in the same /24 — a
+    /// common misconfiguration when a USB-Ethernet adapter and Wi-Fi both
+    /// pick up a lease from the same router. Causes asymmetric routing
+    /// and breaks Moonlight discovery.
+    public var hasOverlappingSubnets: Bool {
+        let prefixes = localAddresses.compactMap { ip -> String? in
+            let parts = ip.split(separator: ".")
+            guard parts.count == 4 else { return nil }
+            return parts.prefix(3).joined(separator: ".")
+        }
+        return Set(prefixes).count < prefixes.count
     }
 
     public var isReadyForLocalPairing: Bool {
