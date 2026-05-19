@@ -805,11 +805,20 @@ struct NetworkView: View {
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
                     if appState.dashboard.networkStatus.hasOverlappingSubnets {
+                        // Informational, NOT acusatório. Dois IPs no
+                        // mesmo /24 geralmente é intencional (Wi-Fi + um
+                        // adaptador USB-Ethernet conectado ao mesmo
+                        // roteador via switch que faz bridge wired↔Wi-Fi).
+                        // Esse setup costuma ser ESSENCIAL pro Moonlight
+                        // quando o AP tem isolation entre clientes
+                        // Wi-Fi — o caminho wired entrega o tráfego que
+                        // o Wi-Fi peer-to-peer bloqueia. Nunca recomendar
+                        // desabilitar uma interface sem mais contexto.
                         Label(
-                            "Duas interfaces compartilham o mesmo subnet. Isso costuma quebrar a descoberta do Moonlight (roteamento ambíguo). Desative a interface secundária — geralmente um adaptador USB-Ethernet sem cabo conectado.",
-                            systemImage: "exclamationmark.triangle.fill"
+                            "Duas interfaces compartilham o mesmo subnet. Isso geralmente é intencional (Wi-Fi + bridge Ethernet) e pode ser essencial pro Moonlight em redes com isolation entre clientes Wi-Fi. O IP marcado com o ícone verde é o do roteamento default — use esse no iPad se o Bonjour não detectar o host automaticamente.",
+                            systemImage: "info.circle"
                         )
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                     }
