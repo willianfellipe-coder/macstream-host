@@ -214,12 +214,106 @@ final class NetworkDiagnosticsManagerTests: XCTestCase {
         )
         XCTAssertFalse(clean.hasOverlappingSubnets)
     }
+
+    // MARK: - Peer reachability
+
+    func testPeerReachabilityIsReachableWhenAtLeastOneNeighborHasMAC() async {
+        let provider = FakeNetworkAddressProvider(
+            addresses: ["192.168.68.125"],
+            gateway: "192.168.68.1"
+        )
+        // One real peer + the gateway (excluded) + the self IP (excluded).
+        let arp = FakeARPInspector(entries: [
+            ARPNeighbor(address: "192.168.68.1", mac: "24:2f:d0:71:dc:c0"),
+            ARPNeighbor(address: "192.168.68.146", mac: "16:7:75:d7:dd:66"),
+            ARPNeighbor(address: "192.168.68.125", mac: "ee:ed:c2:c1:62:6b")
+        ])
+        let manager = DefaultNetworkDiagnosticsManager(
+            addressProvider: provider,
+            portChecker: FakeNetworkPortChecker(statuses: [:]),
+            tailscaleProvider: FakeTailscaleAddressProvider(address: nil),
+            arpInspector: arp,
+            reachabilityProbe: FakeReachabilityProbe(),
+            sunshinePorts: []
+        )
+
+        let result = await manager.runDiagnostics()
+
+        XCTAssertEqual(result.peerReachability, .reachable)
+    }
+
+    func testPeerReachabilityIsIsolatedWhenAllNeighborsIncompleteButGatewayResponds() async {
+        let provider = FakeNetworkAddressProvider(
+            addresses: ["192.168.68.125"],
+            gateway: "192.168.68.1"
+        )
+        // All non-gateway entries are "incomplete" — ARP timed out.
+        let arp = FakeARPInspector(entries: [
+            ARPNeighbor(address: "192.168.68.1", mac: "24:2f:d0:71:dc:c0"),
+            ARPNeighbor(address: "192.168.68.146", mac: nil),
+            ARPNeighbor(address: "192.168.68.106", mac: nil),
+            ARPNeighbor(address: "192.168.68.126", mac: nil)
+        ])
+        let probe = FakeReachabilityProbe(responses: ["192.168.68.1": true])
+        let manager = DefaultNetworkDiagnosticsManager(
+            addressProvider: provider,
+            portChecker: FakeNetworkPortChecker(statuses: [:]),
+            tailscaleProvider: FakeTailscaleAddressProvider(address: nil),
+            arpInspector: arp,
+            reachabilityProbe: probe,
+            sunshinePorts: []
+        )
+
+        // First observation is debounced — needs two consecutive
+        // `.isolated` samples to actually flag it.
+        _ = await manager.runDiagnostics()
+        let result = await manager.runDiagnostics()
+
+        XCTAssertEqual(result.peerReachability, .isolated)
+        XCTAssertEqual(probe.pingedHosts, ["192.168.68.1", "192.168.68.1"])
+    }
+
+    func testPeerReachabilityIsNoGatewayWhenGatewayPingFails() async {
+        let provider = FakeNetworkAddressProvider(
+            addresses: ["192.168.68.125"],
+            gateway: "192.168.68.1"
+        )
+        let arp = FakeARPInspector(entries: [
+            ARPNeighbor(address: "192.168.68.1", mac: nil)
+        ])
+        let probe = FakeReachabilityProbe(responses: ["192.168.68.1": false])
+        let manager = DefaultNetworkDiagnosticsManager(
+            addressProvider: provider,
+            portChecker: FakeNetworkPortChecker(statuses: [:]),
+            tailscaleProvider: FakeTailscaleAddressProvider(address: nil),
+            arpInspector: arp,
+            reachabilityProbe: probe,
+            sunshinePorts: []
+        )
+
+        let result = await manager.runDiagnostics()
+
+        XCTAssertEqual(result.peerReachability, .noGateway)
+    }
 }
 
 private struct FakeNetworkAddressProvider: NetworkAddressProviding {
     let addresses: [String]
-    var details: [NetworkLocalAddress] = []
-    var primary: String? = nil
+    let details: [NetworkLocalAddress]
+    let primary: String?
+    let gateway: String?
+
+    init(
+        addresses: [String],
+        details: [NetworkLocalAddress] = [],
+        primary: String? = nil,
+        gateway: String? = nil
+    ) {
+        self.addresses = addresses
+        self.details = details
+        self.primary = primary
+        self.gateway = gateway
+    }
 
     func localAddresses() -> [String] {
         addresses
@@ -233,6 +327,26 @@ private struct FakeNetworkAddressProvider: NetworkAddressProviding {
     }
 
     func primaryInterfaceName() -> String? { primary }
+    func primaryGatewayIP() -> String? { gateway }
+}
+
+private struct FakeARPInspector: ARPInspecting {
+    let entries: [ARPNeighbor]
+    func neighbors() -> [ARPNeighbor] { entries }
+}
+
+private final class FakeReachabilityProbe: HostReachabilityProbing, @unchecked Sendable {
+    var responses: [String: Bool]
+    private(set) var pingedHosts: [String] = []
+
+    init(responses: [String: Bool] = [:]) {
+        self.responses = responses
+    }
+
+    func ping(host: String, timeoutSeconds: Int) async -> Bool {
+        pingedHosts.append(host)
+        return responses[host] ?? false
+    }
 }
 
 private struct FakeNetworkPortChecker: NetworkPortChecking {

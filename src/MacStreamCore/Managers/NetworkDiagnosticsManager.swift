@@ -18,6 +18,13 @@ public protocol NetworkAddressProviding {
     /// available. The manager uses this to mark one address as
     /// "recomendado" in the UI.
     func primaryInterfaceName() -> String?
+    /// IPv4 of the default gateway. Used by the peer-reachability
+    /// detector to distinguish "isolated from peers" (gateway responds,
+    /// peers don't) from "no link" (gateway silent too). Must be in
+    /// the protocol body, not just the extension — otherwise concrete
+    /// overrides are shadowed by the default implementation when
+    /// dispatched through the protocol.
+    func primaryGatewayIP() -> String?
 }
 
 public extension NetworkAddressProviding {
@@ -25,6 +32,37 @@ public extension NetworkAddressProviding {
         localAddresses().map { NetworkLocalAddress(address: $0, interfaceName: "") }
     }
     func primaryInterfaceName() -> String? { nil }
+    func primaryGatewayIP() -> String? { nil }
+}
+
+/// Reads the ARP table to determine which LAN peers the Mac has
+/// successfully resolved at L2. A peer with a real MAC = the Mac sees
+/// it; an "incomplete" entry = the Mac asked but got no reply. Used to
+/// flag AP-isolation scenarios where only the gateway is reachable.
+public protocol ARPInspecting {
+    /// Returns the IP→MAC table observed locally. MAC == nil means the
+    /// entry exists in the ARP cache but resolution failed
+    /// (`incomplete` marker on macOS).
+    func neighbors() -> [ARPNeighbor]
+}
+
+public struct ARPNeighbor: Equatable {
+    public let address: String
+    /// nil when the kernel reports `(incomplete)` — ARP request went
+    /// out but no MAC came back.
+    public let mac: String?
+
+    public init(address: String, mac: String?) {
+        self.address = address
+        self.mac = mac
+    }
+}
+
+/// Sends ICMP pings to confirm whether a given IP responds. Used to
+/// probe the gateway as the discriminator between "isolated from peers"
+/// and "no network at all".
+public protocol HostReachabilityProbing {
+    func ping(host: String, timeoutSeconds: Int) async -> Bool
 }
 
 public protocol NetworkPortChecking {
@@ -62,17 +100,27 @@ public final class DefaultNetworkDiagnosticsManager: NetworkDiagnosticsManaging 
     private let addressProvider: NetworkAddressProviding
     private let portChecker: NetworkPortChecking
     private let tailscaleProvider: TailscaleAddressProviding
+    private let arpInspector: ARPInspecting
+    private let reachabilityProbe: HostReachabilityProbing
     private let sunshinePorts: [SunshinePort]
+    /// Two consecutive observations matching `.isolated` are required
+    /// before surfacing the banner. Avoids flicker on a single bad ARP
+    /// poll right after a router reboot or DHCP renew.
+    private var lastObservedReachability: PeerReachability = .unknown
 
     public init(
         addressProvider: NetworkAddressProviding = POSIXNetworkAddressProvider(),
         portChecker: NetworkPortChecking = LsofNetworkPortChecker(),
         tailscaleProvider: TailscaleAddressProviding = TailscaleCLIAddressProvider(),
+        arpInspector: ARPInspecting = POSIXARPInspector(),
+        reachabilityProbe: HostReachabilityProbing = PingReachabilityProbe(),
         sunshinePorts: [SunshinePort] = SunshinePort.defaultPorts
     ) {
         self.addressProvider = addressProvider
         self.portChecker = portChecker
         self.tailscaleProvider = tailscaleProvider
+        self.arpInspector = arpInspector
+        self.reachabilityProbe = reachabilityProbe
         self.sunshinePorts = sunshinePorts
     }
 
@@ -109,13 +157,66 @@ public final class DefaultNetworkDiagnosticsManager: NetworkDiagnosticsManaging 
             )
         }
 
+        let peerReachability = await evaluatePeerReachability(localAddresses: localAddresses)
+
         return NetworkDiagnosticResult(
             localAddresses: localAddresses,
             localAddressDetails: details,
             tailscaleAddress: tailscaleAddress,
             portChecks: portChecks,
-            firewallStatus: .unknown
+            firewallStatus: .unknown,
+            peerReachability: peerReachability
         )
+    }
+
+    /// Decision tree for peer reachability:
+    ///   1. List ARP neighbors. Exclude ourselves + the gateway.
+    ///   2. If at least one neighbor has a real MAC → `.reachable`.
+    ///   3. If all remaining entries are "incomplete" OR the list is
+    ///      empty, ping the gateway:
+    ///        - Gateway responds → `.isolated` (talking only to router)
+    ///        - Gateway silent → `.noGateway` (link/DHCP problem)
+    ///   4. Apply 2-sample debounce: a flag transition to `.isolated`
+    ///      only sticks if the prior sample also said `.isolated`.
+    private func evaluatePeerReachability(localAddresses: [String]) async -> PeerReachability {
+        let gatewayIP = addressProvider.primaryGatewayIP()
+        let ownAddresses = Set(localAddresses)
+        let neighbors = arpInspector.neighbors().filter { neighbor in
+            // Drop self + gateway from the peer candidate list — we
+            // care only about whether OTHER devices respond.
+            if ownAddresses.contains(neighbor.address) { return false }
+            if let gw = gatewayIP, neighbor.address == gw { return false }
+            return true
+        }
+
+        let hasResolvedPeer = neighbors.contains { $0.mac != nil }
+        if hasResolvedPeer {
+            lastObservedReachability = .reachable
+            return .reachable
+        }
+
+        // No resolved peers. The gateway probe disambiguates "isolated
+        // from peers" (talking only to the router) from "no link".
+        let gatewayReachable: Bool
+        if let gw = gatewayIP {
+            gatewayReachable = await reachabilityProbe.ping(host: gw, timeoutSeconds: 1)
+        } else {
+            gatewayReachable = false
+        }
+
+        let candidate: PeerReachability = gatewayReachable ? .isolated : .noGateway
+
+        // Debounce only `.isolated` — `.noGateway` is unambiguous and
+        // surfaces immediately. For `.isolated`, require two consecutive
+        // observations before flipping the banner so a single ARP miss
+        // (e.g. right after DHCP renew) doesn't trigger a false alarm.
+        if candidate == .isolated {
+            let priorWasIsolated = (lastObservedReachability == .isolated)
+            lastObservedReachability = .isolated
+            return priorWasIsolated ? .isolated : .unknown
+        }
+        lastObservedReachability = candidate
+        return candidate
     }
 
     private func detail(for port: SunshinePort, status: CheckStatus) -> String {
@@ -197,9 +298,16 @@ public final class POSIXNetworkAddressProvider: NetworkAddressProviding {
     }
 
     public func primaryInterfaceName() -> String? {
-        // Parse `route -n get default` — the canonical macOS way to find
-        // the interface backing the default IPv4 route. Used by the
-        // dashboard to mark one entry as "recomendado".
+        defaultRouteFields()["interface"]
+    }
+
+    public func primaryGatewayIP() -> String? {
+        defaultRouteFields()["gateway"]
+    }
+
+    /// Parses `route -n get default` once and returns the
+    /// key:value pairs we care about (interface + gateway).
+    private func defaultRouteFields() -> [String: String] {
         let task = Process()
         task.launchPath = "/sbin/route"
         task.arguments = ["-n", "get", "default"]
@@ -209,20 +317,24 @@ public final class POSIXNetworkAddressProvider: NetworkAddressProviding {
         do {
             try task.run()
         } catch {
-            return nil
+            return [:]
         }
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        guard let output = String(data: data, encoding: .utf8) else { return [:] }
+        var fields: [String: String] = [:]
         for line in output.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("interface:") {
-                let parts = trimmed.split(separator: ":", maxSplits: 1)
-                guard parts.count == 2 else { return nil }
-                return parts[1].trimmingCharacters(in: .whitespaces)
+            for key in ["interface", "gateway"] {
+                if trimmed.hasPrefix("\(key):") {
+                    let parts = trimmed.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2 {
+                        fields[key] = parts[1].trimmingCharacters(in: .whitespaces)
+                    }
+                }
             }
         }
-        return nil
+        return fields
     }
 
     /// BSD name → user-facing label (e.g. `en0` → "Wi-Fi"). Reads the
@@ -445,5 +557,84 @@ public final class DefaultCommandBinaryResolver: CommandBinaryResolving {
             .map(String.init) ?? []
 
         return Array(Set(pathDirectories + fallbackDirectories)).sorted()
+    }
+}
+
+/// Parses `arp -an` output to enumerate the IP→MAC table observed by
+/// the macOS kernel. macOS prints lines like:
+///   ? (192.168.68.1) at 24:2f:d0:71:dc:c0 on en0 ifscope [ethernet]
+///   ? (192.168.68.106) at (incomplete) on en0 ifscope [ethernet]
+/// We extract the IP and the MAC (or nil for "incomplete"). Read-only,
+/// no side effects.
+public final class POSIXARPInspector: ARPInspecting {
+    public init() {}
+
+    public func neighbors() -> [ARPNeighbor] {
+        let task = Process()
+        task.launchPath = "/usr/sbin/arp"
+        task.arguments = ["-an"]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+        } catch {
+            return []
+        }
+        task.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return [] }
+
+        var results: [ARPNeighbor] = []
+        for line in output.split(separator: "\n") {
+            // Format: `? (IP) at MAC on iface ...` or `? (IP) at (incomplete) on iface`
+            guard let ipStart = line.firstIndex(of: "("),
+                  let ipEnd = line.firstIndex(of: ")"),
+                  ipStart < ipEnd else {
+                continue
+            }
+            let ip = String(line[line.index(after: ipStart)..<ipEnd])
+
+            // Slice the "at <something>" portion.
+            let afterIP = line[line.index(after: ipEnd)...]
+            guard let atRange = afterIP.range(of: " at ") else { continue }
+            let macPart = afterIP[atRange.upperBound...]
+            let macToken = macPart.split(separator: " ").first.map(String.init) ?? ""
+
+            let mac: String?
+            if macToken == "(incomplete)" || macToken.isEmpty {
+                mac = nil
+            } else {
+                mac = macToken
+            }
+            results.append(ARPNeighbor(address: ip, mac: mac))
+        }
+        return results
+    }
+}
+
+/// Sends an ICMP echo request and reports success/failure. The macOS
+/// `ping` binary is suid-root and works without sandbox tweaks. We
+/// keep the timeout aggressive (1s default) so a 5-second dashboard
+/// refresh cycle stays snappy when the gateway is down.
+public final class PingReachabilityProbe: HostReachabilityProbing {
+    public init() {}
+
+    public func ping(host: String, timeoutSeconds: Int) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let task = Process()
+            task.launchPath = "/sbin/ping"
+            task.arguments = ["-c", "1", "-W", "\(timeoutSeconds * 1000)", "-t", "\(timeoutSeconds)", host]
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            task.terminationHandler = { p in
+                continuation.resume(returning: p.terminationStatus == 0)
+            }
+            do {
+                try task.run()
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
     }
 }

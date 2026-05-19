@@ -802,6 +802,48 @@ struct NetworkView: View {
 
     var body: some View {
         PageContainer(title: "Rede", subtitle: "Diagnóstico local de IP, portas do motor de streaming e orientação para VPN mesh.") {
+            // Network isolation banner — surfaces BEFORE the address list
+            // so the user sees this first when their iPad/iPhone can't
+            // reach the host. Diagnostic cost: low (ARP table parse +
+            // optional gateway ping). False-positive guard via 2-sample
+            // debounce in NetworkDiagnosticsManager.
+            switch appState.dashboard.networkStatus.peerReachability {
+            case .isolated:
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Mac alcança o roteador, mas não outros devices da rede.")
+                            .font(.callout.weight(.semibold))
+                        Text("Isso é AP isolation, tabela ARP do roteador travada, ou VLAN de visitante. **Nenhum cliente Moonlight vai conectar** enquanto isso persistir — não é problema do MacStream. Reinicie o roteador (30s sem energia) e teste novamente.")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .foregroundStyle(.orange)
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(.orange.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.orange.opacity(0.35)))
+            case .noGateway:
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Mac sem conexão à rede.")
+                            .font(.callout.weight(.semibold))
+                        Text("O gateway padrão não responde. Verifique se o Wi-Fi ou Ethernet está realmente conectado e funcionando.")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } icon: {
+                    Image(systemName: "wifi.slash")
+                        .foregroundStyle(.red)
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(.red.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.red.opacity(0.35)))
+            case .reachable, .unknown:
+                EmptyView()
+            }
+
             GroupBox("Endereços") {
                 VStack(alignment: .leading, spacing: 8) {
                     if appState.dashboard.networkStatus.hasOverlappingSubnets {

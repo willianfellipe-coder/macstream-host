@@ -1111,6 +1111,26 @@ public struct NetworkLocalAddress: Codable, Equatable {
     }
 }
 
+/// Whether the Mac can reach OTHER devices on the LAN (excluding the
+/// default gateway). Surface in the dashboard so the user can tell
+/// apart "MacStream broken" from "router broken / AP isolation". Today
+/// the dashboard only listed local IPs without verifying that peers can
+/// actually reach those IPs — a gap that cost hours of debugging when
+/// the router quietly isolated clients.
+public enum PeerReachability: String, Codable, Equatable {
+    /// Not enough data yet, or no peers observed in the ARP table.
+    case unknown
+    /// At least one neighbor IP has a resolved MAC — bridge is healthy.
+    case reachable
+    /// Multiple ARP probes failed (entries are "incomplete") but the
+    /// gateway responds. The Mac is alone on the LAN — classic AP
+    /// isolation, stale ARP table, or VLAN misconfig.
+    case isolated
+    /// Even the gateway doesn't respond — the Wi-Fi/Ethernet link is
+    /// dead. User should reconnect to the network.
+    case noGateway
+}
+
 public struct NetworkDiagnosticResult: Codable, Equatable {
     public var localAddresses: [String]
     /// Same addresses as `localAddresses` but annotated with interface
@@ -1121,23 +1141,30 @@ public struct NetworkDiagnosticResult: Codable, Equatable {
     public var tailscaleAddress: String?
     public var portChecks: [NetworkPortCheck]
     public var firewallStatus: CheckStatus
+    /// Peer reachability assessment — see `PeerReachability` for the
+    /// rationale. Dashboard renders a banner when `.isolated` or
+    /// `.noGateway` to point the user away from MacStream and at the
+    /// real culprit (router config).
+    public var peerReachability: PeerReachability
 
     public init(
         localAddresses: [String],
         localAddressDetails: [NetworkLocalAddress] = [],
         tailscaleAddress: String? = nil,
         portChecks: [NetworkPortCheck],
-        firewallStatus: CheckStatus = .unknown
+        firewallStatus: CheckStatus = .unknown,
+        peerReachability: PeerReachability = .unknown
     ) {
         self.localAddresses = localAddresses
         self.localAddressDetails = localAddressDetails
         self.tailscaleAddress = tailscaleAddress
         self.portChecks = portChecks
         self.firewallStatus = firewallStatus
+        self.peerReachability = peerReachability
     }
 
     private enum CodingKeys: String, CodingKey {
-        case localAddresses, localAddressDetails, tailscaleAddress, portChecks, firewallStatus
+        case localAddresses, localAddressDetails, tailscaleAddress, portChecks, firewallStatus, peerReachability
     }
 
     public init(from decoder: Decoder) throws {
@@ -1147,6 +1174,7 @@ public struct NetworkDiagnosticResult: Codable, Equatable {
         tailscaleAddress = try container.decodeIfPresent(String.self, forKey: .tailscaleAddress)
         portChecks = try container.decode([NetworkPortCheck].self, forKey: .portChecks)
         firewallStatus = try container.decodeIfPresent(CheckStatus.self, forKey: .firewallStatus) ?? .unknown
+        peerReachability = try container.decodeIfPresent(PeerReachability.self, forKey: .peerReachability) ?? .unknown
     }
 
     /// True when two or more local addresses live in the same /24 — a
