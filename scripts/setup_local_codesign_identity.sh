@@ -9,8 +9,8 @@
 #
 # Why this is needed: ad-hoc signing (`codesign --sign -`) generates a fresh
 # cdhash on every rebuild. macOS TCC keys those grants by cdhash, so the
-# user has to re-add MacStream Host + MacStreamEngine + macstream-agent to
-# System Settings after every package_dmg.sh. With a real self-signed cert,
+# user has to re-add MacStream Host + MacStream Video Engine to System
+# Settings after every package_dmg.sh. With a real self-signed cert,
 # the leaf cert hash stays constant across rebuilds even when the binary
 # content changes — TCC stores the requirement once and keeps honoring it.
 #

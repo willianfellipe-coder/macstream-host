@@ -1700,7 +1700,7 @@ struct ScreenRecordingRecoveryBanner: View {
                     Text("O macOS revoga essa permissão a cada reinstalação do app. Resete e ative o toggle novamente para destravar a sessão.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Lembre de adicionar **MacStream Host** e **MacStreamEngine** em Gravação de Tela, e os mesmos dois (mais `macstream-agent`) em Acessibilidade — sem isso o teclado pelo Moonlight não funciona. docs/POST_INSTALL.md tem o passo-a-passo.")
+                    Text("Lembre de adicionar **MacStream Host** e **MacStream Video Engine** em Gravação de Tela. Se teclado ou mouse falharem, adicione também o engine em Acessibilidade. docs/POST_INSTALL.md tem o passo-a-passo.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1732,10 +1732,10 @@ struct ScreenRecordingRecoveryBanner: View {
 
                 Button {
                     NSWorkspace.shared.activateFileViewerSelecting([
-                        URL(fileURLWithPath: "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine")
+                        URL(fileURLWithPath: "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app")
                     ])
                 } label: {
-                    Label("Revelar binário no Finder", systemImage: "folder")
+                    Label("Revelar engine no Finder", systemImage: "folder")
                 }
 
                 Spacer()

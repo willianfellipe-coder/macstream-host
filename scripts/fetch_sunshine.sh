@@ -2,18 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Downloads the upstream Sunshine release and extracts the components MacStream
-# Host needs into a flat staging directory:
+# Host needs into a flat staging directory. package_dmg.sh wraps these staged
+# files back into MacStream's embedded Sunshine.app at build time:
 #
 #   Resources/sunshine/
 #   ├── bin/MacStreamEngine          # renamed Sunshine binary
 #   ├── Frameworks/{libssl,libcrypto,libminiupnpc}.dylib
 #   └── assets/{apps.json,box.png,steam.png,desktop*.png,web/}
 #
-# package_dmg.sh later moves these into MacStream Host.app/Contents/{MacOS,
-# Frameworks,Resources/assets} so the engine inherits the parent bundle's TCC
-# identity. There is no embedded `.app` wrapper — having a nested bundle is
-# exactly what made macOS 14+ treat Sunshine as a separate Screen Recording
-# subject (and the disclaim API does not bypass that check).
+# The intermediate flat layout is only a source cache. The runtime bundle must
+# stay a real `.app`: on macOS 26, launching Sunshine as a bare helper binary
+# can hang in the AVFoundation dummy-frame probe before HTTP/RTSP starts.
 #
 # Idempotent: skips download when staged files match the expected SHA-256 of
 # the source DMG. Pinned to the upstream release in UPSTREAMS.md.
@@ -180,15 +179,12 @@ fi
 echo "$EXPECTED_SHA256" > "$STATE_FILE"
 
 cat > "$STAGE_DIR/README.md" <<EOF
-# Sunshine staging (flat layout)
+# Sunshine staging
 
 Staged by \`scripts/fetch_sunshine.sh\` for embedding into MacStream Host's
-main bundle as a helper executable (not a nested \`.app\`). Having a separate
-\`.app\` bundle gives macOS a second TCC identity, which Screen Recording does
-not let parent processes disclaim. By staging the binary, frameworks and
-assets separately, \`package_dmg.sh\` can drop them into the parent bundle's
-\`Contents/MacOS\`, \`Contents/Frameworks\` and \`Contents/Resources/assets\`
-respectively — one identity, one permission grant.
+main bundle. This directory is a flat source cache; \`package_dmg.sh\` wraps
+the binary, frameworks and assets into \`Contents/Resources/sunshine/Sunshine.app\`
+so macOS capture APIs get a normal app-bundle context at runtime.
 
 - Upstream: $RELEASE_TAG_URL
 - Version: $SUNSHINE_VERSION

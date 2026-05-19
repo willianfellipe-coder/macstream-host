@@ -17,10 +17,11 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 DMG_STAGING_DIR="$PACKAGE_DIR/dmg-staging"
 SUNSHINE_STAGE_DIR="$ROOT_DIR/Resources/sunshine"
+SUNSHINE_STAGE_APP="$SUNSHINE_STAGE_DIR/Sunshine.app"
 SUNSHINE_STAGE_BIN="$SUNSHINE_STAGE_DIR/bin/MacStreamEngine"
 SUNSHINE_STAGE_FRAMEWORKS="$SUNSHINE_STAGE_DIR/Frameworks"
 SUNSHINE_STAGE_ASSETS="$SUNSHINE_STAGE_DIR/assets"
-ENGINE_BIN_NAME="MacStreamEngine"
+SUNSHINE_BUNDLE_DEST="$RESOURCES_DIR/sunshine"
 SWIFTPM_CACHE_DIR="$PACKAGE_DIR/swiftpm-cache"
 SWIFTPM_CONFIG_DIR="$PACKAGE_DIR/swiftpm-config"
 SWIFTPM_SECURITY_DIR="$PACKAGE_DIR/swiftpm-security"
@@ -29,9 +30,9 @@ CLANG_MODULE_CACHE_DIR="$PACKAGE_DIR/clang-module-cache"
 
 echo "Building $PRODUCT_NAME $VERSION ($CONFIGURATION)"
 
-if [[ ! -x "$SUNSHINE_STAGE_BIN" ]]; then
-  echo "Engine binary is not staged at $SUNSHINE_STAGE_BIN" >&2
-  echo "Run ./scripts/fetch_sunshine.sh first (downloads pinned upstream DMG, verifies SHA-256, extracts flat layout)." >&2
+if [[ ! -d "$SUNSHINE_STAGE_APP" && ! -x "$SUNSHINE_STAGE_BIN" ]]; then
+  echo "Sunshine is not staged under $SUNSHINE_STAGE_DIR" >&2
+  echo "Run ./scripts/fetch_sunshine.sh first (downloads pinned upstream DMG, verifies SHA-256)." >&2
   exit 5
 fi
 
@@ -40,10 +41,9 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "App bundle: $APP_DIR"
   echo "DMG staging: $DMG_STAGING_DIR"
   echo "Bundle identifier: org.macstream.host"
-  echo "Engine binary staging: $SUNSHINE_STAGE_BIN"
-  echo "Engine binary destination: $MACOS_DIR/$ENGINE_BIN_NAME"
-  echo "Engine frameworks destination: $FRAMEWORKS_DIR/"
-  echo "Engine assets destination: $RESOURCES_DIR/assets/"
+  echo "Sunshine app staging: $SUNSHINE_STAGE_APP"
+  echo "Flat engine fallback staging: $SUNSHINE_STAGE_BIN"
+  echo "Sunshine bundle destination: $SUNSHINE_BUNDLE_DEST/Sunshine.app"
   echo "Create DMG: ${CREATE_DMG:-0}"
   exit 0
 fi
@@ -87,49 +87,67 @@ cp "$ROOT_DIR/LICENSE" "$RESOURCES_DIR/LICENSE"
 cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$RESOURCES_DIR/THIRD_PARTY_NOTICES.md"
 cp "$ROOT_DIR/UPSTREAMS.md" "$RESOURCES_DIR/UPSTREAMS.md"
 
-# Engine binary becomes a sibling of MacStream Host inside Contents/MacOS so
-# the OS attributes its TCC calls to the parent bundle identity. The binary
-# uses @executable_path/../Frameworks/ and ../Resources/assets/ which resolve
-# to Contents/Frameworks/ and Contents/Resources/assets/ from this location.
-cp "$SUNSHINE_STAGE_BIN" "$MACOS_DIR/$ENGINE_BIN_NAME"
-chmod 755 "$MACOS_DIR/$ENGINE_BIN_NAME"
-
-# Embed `LSUIElement=true` into the engine binary so macOS LaunchServices
-# treats it as an accessory process — no Dock icon. Without this the
-# engine claims the parent bundle's Dock entry under `org.macstream.host`
-# and the "ghost MacStream icon" appears even with the GUI fully closed.
-# Requires LIEF (`python3 -m pip install --user lief`). When LIEF is
-# missing we emit a warning and continue; the resulting bundle works,
-# the engine just stays in the Dock until LIEF is installed and the
-# bundle is rebuilt.
-#
-# Must run BEFORE the engine's final codesign because adding a Mach-O
-# section invalidates the existing signature.
-if command -v python3 >/dev/null 2>&1 && python3 -c "import lief" 2>/dev/null; then
-  echo "Embedding LSUIElement=true into the engine binary (LIEF)..."
-  python3 "$ROOT_DIR/scripts/embed_lsuielement.py" "$MACOS_DIR/$ENGINE_BIN_NAME"
+# Sunshine must remain a real `.app` bundle on macOS. Flattening the binary
+# into Contents/MacOS made the process pass some TCC checks but hang forever
+# in Sunshine's AVFoundation dummy-frame probe before opening HTTP/RTSP
+# sockets. The app wrapper gives LaunchServices and AVFoundation the bundle
+# context they expect, while LSUIElement keeps it out of the Dock.
+rm -rf "$SUNSHINE_BUNDLE_DEST"
+mkdir -p "$SUNSHINE_BUNDLE_DEST"
+if [[ -d "$SUNSHINE_STAGE_APP" ]]; then
+  /usr/bin/ditto "$SUNSHINE_STAGE_APP" "$SUNSHINE_BUNDLE_DEST/Sunshine.app"
 else
-  echo "WARNING: LIEF not installed — engine will appear in the Dock." >&2
-  echo "         Install once: python3 -m pip install --user lief" >&2
+  SYNTH_APP="$SUNSHINE_BUNDLE_DEST/Sunshine.app"
+  mkdir -p "$SYNTH_APP/Contents/MacOS" "$SYNTH_APP/Contents/Frameworks" "$SYNTH_APP/Contents/Resources"
+  /usr/bin/ditto "$SUNSHINE_STAGE_BIN" "$SYNTH_APP/Contents/MacOS/Sunshine"
+  chmod 755 "$SYNTH_APP/Contents/MacOS/Sunshine"
+  if [[ -d "$SUNSHINE_STAGE_FRAMEWORKS" ]]; then
+    /usr/bin/ditto "$SUNSHINE_STAGE_FRAMEWORKS" "$SYNTH_APP/Contents/Frameworks"
+  fi
+  if [[ -d "$SUNSHINE_STAGE_ASSETS" ]]; then
+    /usr/bin/ditto "$SUNSHINE_STAGE_ASSETS" "$SYNTH_APP/Contents/Resources/assets"
+  fi
+  cat > "$SYNTH_APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>Sunshine</string>
+  <key>CFBundleIdentifier</key>
+  <string>org.macstream.host.engine.sunshine</string>
+  <key>CFBundleName</key>
+  <string>MacStream Video Engine</string>
+  <key>CFBundleDisplayName</key>
+  <string>MacStream Video Engine</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$BUILD_NUMBER</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.2</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>MacStream Video Engine precisa capturar a tela para transmitir ao Moonlight.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>MacStream Video Engine precisa do microfone para transmitir audio ao Moonlight.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>MacStream Video Engine precisa capturar o audio do sistema para transmitir ao Moonlight.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>MacStream Video Engine aceita conexoes Moonlight na rede local.</string>
+</dict>
+</plist>
+PLIST
 fi
 
-if [[ -d "$SUNSHINE_STAGE_FRAMEWORKS" ]]; then
-  shopt -s nullglob
-  for src in "$SUNSHINE_STAGE_FRAMEWORKS"/*.dylib "$SUNSHINE_STAGE_FRAMEWORKS"/*.framework; do
-    [[ -e "$src" ]] || continue
-    /usr/bin/ditto "$src" "$FRAMEWORKS_DIR/$(/usr/bin/basename "$src")"
-  done
-  shopt -u nullglob
-fi
-
-if [[ -d "$SUNSHINE_STAGE_ASSETS" ]]; then
-  rm -rf "$RESOURCES_DIR/assets"
-  /usr/bin/ditto "$SUNSHINE_STAGE_ASSETS" "$RESOURCES_DIR/assets"
-fi
-
-if [[ -f "$SUNSHINE_STAGE_DIR/LICENSE" ]]; then
-  cp "$SUNSHINE_STAGE_DIR/LICENSE" "$RESOURCES_DIR/LICENSE-engine"
-fi
+for sunshine_note in "$SUNSHINE_STAGE_DIR/LICENSE" "$SUNSHINE_STAGE_DIR/README.md"; do
+  if [[ -f "$sunshine_note" ]]; then
+    cp "$sunshine_note" "$SUNSHINE_BUNDLE_DEST/$(/usr/bin/basename "$sunshine_note")"
+  fi
+done
 
 # Sunshine v2026.516+ captures system audio via the macOS Tap API on
 # macOS 14.2+, so we no longer bundle BlackHole. Users who want a
@@ -265,11 +283,10 @@ JSON
 echo "Created app bundle: $APP_DIR"
 
 # Sign the bundle. Order matters:
-#   1. Embedded dylibs in Contents/Frameworks first (codesign --deep does NOT
-#      descend into Frameworks reliably on every macOS version)
-#   2. The helper engine binary in Contents/MacOS
+#   1. Sunshine.app nested frameworks/dylibs first
+#   2. Sunshine.app wrapper
 #   3. Sibling helper executables (macstreamctl, macstream-agent)
-#   4. The parent .app last — its signature now seals everything underneath
+#   4. The parent MacStream Host.app last
 #
 # Identity priority:
 #   - DEVELOPER_ID_APPLICATION env var (Apple Developer ID) → production
@@ -305,36 +322,26 @@ fi
 
 echo "Signing with identity: $SIGN_IDENTITY"
 
-if [[ -d "$FRAMEWORKS_DIR" ]]; then
-  echo "Signing Contents/Frameworks/..."
-  /usr/bin/find "$FRAMEWORKS_DIR" -maxdepth 1 \
+EMBEDDED_SUNSHINE_APP="$SUNSHINE_BUNDLE_DEST/Sunshine.app"
+if [[ -d "$EMBEDDED_SUNSHINE_APP/Contents/Frameworks" ]]; then
+  echo "Signing embedded Sunshine.app frameworks..."
+  /usr/bin/find "$EMBEDDED_SUNSHINE_APP/Contents/Frameworks" -maxdepth 1 \
     \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
     | xargs -0 -I {} /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --timestamp=none {} || true
 fi
 
-if [[ -x "$MACOS_DIR/$ENGINE_BIN_NAME" ]]; then
-  # Use the parent bundle's identifier so TCC sees the helper as part of
-  # MacStream Host instead of as a standalone Mach-O with its own ad-hoc
-  # identity. Without --identifier, codesign falls back to `<basename>-<hash>`
-  # which makes the helper a separate TCC subject.
-  echo "Signing Contents/MacOS/$ENGINE_BIN_NAME (engine helper) as org.macstream.host..."
+if [[ -d "$EMBEDDED_SUNSHINE_APP" ]]; then
+  echo "Signing embedded Sunshine.app wrapper..."
   /usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
-    --identifier "org.macstream.host" \
     --options runtime \
     --entitlements "$ROOT_DIR/packaging/entitlements.plist" \
-    "$MACOS_DIR/$ENGINE_BIN_NAME" >/dev/null
+    "$EMBEDDED_SUNSHINE_APP" >/dev/null
 fi
 
 for helper in macstreamctl macstream-agent; do
   if [[ -x "$MACOS_DIR/$helper" ]]; then
-    # Same `--identifier "org.macstream.host"` treatment as MacStreamEngine.
-    # Without it codesign falls back to the binary's basename, making each
-    # helper a separate TCC subject. With `responsibility_spawnattrs_setdisclaim`
-    # in play, the engine's Accessibility check is attributed to the
-    # responsible process (the agent) — so the agent MUST share the parent's
-    # identifier for a single Accessibility grant on MacStream Host.app to
-    # actually cover the entire helper chain. Without this fix, keyboard
-    # and mouse forwarding from Moonlight is silently dropped.
+    # Keep MacStream's own helper tools under the parent bundle identifier so
+    # app, CLI and resident agent share one stable macOS permission subject.
     /usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
       --identifier "org.macstream.host" \
       --options runtime \
@@ -343,7 +350,7 @@ for helper in macstreamctl macstream-agent; do
   fi
 done
 
-echo "Signing parent MacStream Host.app (without --deep so helper identifier is preserved)..."
+echo "Signing parent MacStream Host.app..."
 /usr/bin/codesign --force --sign "$SIGN_IDENTITY" \
   --options runtime \
   --entitlements "$ROOT_DIR/packaging/entitlements.plist" \

@@ -136,7 +136,7 @@ public final class DefaultSunshineManager: SunshineManaging {
            await processSignaler.matchesOwnership(ownedProcess) {
             let isWebUIReachable = await webUIProbe.isReachable()
             return SunshineStatus(
-                state: .running,
+                state: isWebUIReachable ? .running : .degraded,
                 version: nil,
                 webUIReachable: isWebUIReachable,
                 configurationPath: ownedProcess.configPath,
@@ -157,7 +157,7 @@ public final class DefaultSunshineManager: SunshineManaging {
         }
 
         return SunshineStatus(
-            state: isRunning ? .running : .stopped,
+            state: isRunning ? (isWebUIReachable ? .running : .degraded) : .stopped,
             version: nil,
             webUIReachable: isWebUIReachable,
             configurationPath: configurationManager.sunshineConfigURL.path,
@@ -177,7 +177,13 @@ public final class DefaultSunshineManager: SunshineManaging {
         if let ownedProcess = try ownershipStore.load() {
             if await processSignaler.isRunning(processID: ownedProcess.processID),
                await processSignaler.matchesOwnership(ownedProcess) {
-                return
+                if ownsResolvedBinary(ownedProcess, binaryURL: binaryURL) {
+                    return
+                }
+
+                guard await processSignaler.terminate(processID: ownedProcess.processID, timeout: 5) else {
+                    throw SunshineManagerError.terminationFailed(ownedProcess.processID)
+                }
             }
 
             try ownershipStore.clear()
@@ -225,22 +231,23 @@ public final class DefaultSunshineManager: SunshineManaging {
         let configPath = configurationManager.sunshineConfigURL.path
         let result = await ProcessCommandRunner().run(
             executablePath: "/usr/bin/pgrep",
-            arguments: ["-f", "MacStreamEngine \(configPath)"],
+            arguments: ["-f", configPath],
             timeout: 2
         )
         guard result.exitCode == 0 else { return nil }
-        let pid = result.standardOutput
+        for pid in result.standardOutput
             .split(whereSeparator: \.isNewline)
-            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
-            .first
-        guard let pid else { return nil }
-        let candidate = SunshineOwnedProcess(
-            processID: pid,
-            binaryPath: binaryURL.path,
-            configPath: configPath
-        )
-        guard await processSignaler.matchesOwnership(candidate) else { return nil }
-        return candidate
+            .compactMap({ Int32($0.trimmingCharacters(in: .whitespaces)) }) {
+            let candidate = SunshineOwnedProcess(
+                processID: pid,
+                binaryPath: binaryURL.path,
+                configPath: configPath
+            )
+            if await processSignaler.matchesOwnership(candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     public func stop() async throws {
@@ -269,9 +276,15 @@ public final class DefaultSunshineManager: SunshineManaging {
             try await stop()
         } catch SunshineManagerError.noOwnedProcess {
             // Starting fresh is safe when there is no owned process.
+        } catch SunshineManagerError.ownershipMismatch {
+            try ownershipStore.clear()
         }
 
         try await start()
+    }
+
+    private func ownsResolvedBinary(_ process: SunshineOwnedProcess, binaryURL: URL) -> Bool {
+        URL(fileURLWithPath: process.binaryPath).standardizedFileURL.path == binaryURL.standardizedFileURL.path
     }
 
     public func openWebUI() async throws {
@@ -311,7 +324,6 @@ public final class ProcessSunshineLauncher: SunshineProcessLaunching {
         ensureFileExists(stdoutURL)
         ensureFileExists(stderrURL)
 
-        #if os(macOS)
         let stdout = try FileHandle(forWritingTo: stdoutURL)
         let stderr = try FileHandle(forWritingTo: stderrURL)
         _ = try? stdout.seekToEnd()
@@ -321,26 +333,20 @@ public final class ProcessSunshineLauncher: SunshineProcessLaunching {
             try? stderr.close()
         }
 
-        // Spawn Sunshine with `responsibility_spawnattrs_setdisclaim` so TCC checks
-        // (Screen Recording, Microphone) are attributed to MacStream Host instead of
-        // to the embedded Sunshine bundle. One permission grant for the parent app
-        // is enough — Sunshine no longer needs its own entry in System Settings.
-        let pid = try spawnDisclaimedChild(DisclaimedSpawnConfig(
-            executablePath: binaryURL.path,
-            arguments: [configURL.path],
-            stdoutFD: stdout.fileDescriptor,
-            stderrFD: stderr.fileDescriptor
-        ))
+        let process = Process()
+        process.executableURL = binaryURL
+        process.arguments = [configURL.path]
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
 
         return SunshineOwnedProcess(
-            processID: pid,
+            processID: process.processIdentifier,
             binaryPath: binaryURL.path,
             configPath: configURL.path,
             startedAt: dateProvider()
         )
-        #else
-        throw SunshineManagerError.launchFailed("Sunshine launcher requires macOS")
-        #endif
     }
 
     private func ensureFileExists(_ url: URL) {
@@ -424,15 +430,41 @@ public final class SystemSunshineProcessSignaler: SunshineProcessSignaling {
 
         let command = result.standardOutput
         return command.contains(process.configPath)
-            && (command.contains(process.binaryPath) || command.contains("sunshine"))
+            && commandMatchesBinary(command, binaryPath: process.binaryPath)
     }
 
     public func terminate(processID: Int32, timeout: TimeInterval) async -> Bool {
         #if os(macOS)
         guard kill(processID, SIGTERM) == 0 else {
-            return false
+            return errno == ESRCH
         }
 
+        if await waitForExit(processID: processID, timeout: timeout) {
+            return true
+        }
+
+        guard kill(processID, SIGKILL) == 0 else {
+            return errno == ESRCH
+        }
+
+        return await waitForExit(processID: processID, timeout: 2)
+        #else
+        return false
+        #endif
+    }
+
+    private func commandMatchesBinary(_ command: String, binaryPath: String) -> Bool {
+        if command.contains(binaryPath) {
+            return true
+        }
+
+        let executableName = URL(fileURLWithPath: binaryPath).lastPathComponent
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedCommand == executableName || trimmedCommand.hasPrefix("\(executableName) ")
+    }
+
+    private func waitForExit(processID: Int32, timeout: TimeInterval) async -> Bool {
+        #if os(macOS)
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !(await isRunning(processID: processID)) {
@@ -491,16 +523,14 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
 
     private func bundleResourcePaths() -> [String] {
         guard let bundleResourceURL else { return [] }
-        // Bundle.main.resourceURL is .../Contents/Resources/. The engine binary
-        // now lives at ../MacOS/MacStreamEngine — sibling of the host app
-        // binary — so it inherits the parent bundle's TCC identity.
         let contentsURL = bundleResourceURL.deletingLastPathComponent()
         return [
-            contentsURL.appendingPathComponent("MacOS/MacStreamEngine").path,
-            // Legacy paths kept temporarily so an in-place upgrade from the old
-            // layout still resolves a working binary on first launch.
             bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine").path,
             bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/sunshine").path,
+            // Legacy fallback for builds produced by the broken flat-helper
+            // packaging. Keep it after Sunshine.app so fixed bundles prefer
+            // the native app wrapper that macOS capture APIs expect.
+            contentsURL.appendingPathComponent("MacOS/MacStreamEngine").path,
             bundleResourceURL.appendingPathComponent("sunshine/bin/sunshine").path
         ]
     }
@@ -518,9 +548,9 @@ public final class DefaultSunshineBinaryResolver: SunshineBinaryResolving {
 
     private static func defaultCandidatePaths() -> [String] {
         [
-            "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/sunshine",
+            "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine",
             "/Applications/MacStream Host.app/Contents/Resources/sunshine/bin/sunshine",
             "/opt/homebrew/bin/sunshine",
             "/usr/local/bin/sunshine",
@@ -540,14 +570,7 @@ public final class PgrepSunshineProcessInspector: SunshineProcessInspecting {
     }
 
     public func isSunshineRunning() async -> Bool {
-        // We probe both the upstream binary name (`sunshine`) — for legacy
-        // installs the user may have placed in /opt/homebrew/bin or
-        // /Applications/Sunshine.app — and our renamed helper
-        // (`MacStreamEngine`). Without checking `MacStreamEngine`,
-        // `DefaultSunshineManager.start()` cannot detect a concurrent
-        // engine spawn and two instances race to bind the same RTSP port
-        // (48010), producing the "Couldn't bind RTSP server" fatal.
-        for executable in ["sunshine", "MacStreamEngine"] {
+        for executable in ["Sunshine", "sunshine", "MacStreamEngine"] {
             let result = await runner.run(
                 executablePath: "/usr/bin/pgrep",
                 arguments: ["-x", executable],

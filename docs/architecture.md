@@ -54,7 +54,9 @@ Runtime code does not depend on mocks. Test doubles live under `tests/`. The Swi
 
 ### Dependency Installation Boundary
 
-MacStream Host now **ships the video engine inside the app bundle** as a renamed Mach-O helper (`MacStreamEngine`) at `Contents/MacOS/`, along with its dynamic libraries (`Contents/Frameworks/`) and assets (`Contents/Resources/assets/`). The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the pinned upstream Sunshine release, verifies its SHA-256, strips the upstream signature, and re-signs every component with our own identity (`Identifier=org.macstream.host`) so the engine binary is treated as part of the host app for TCC purposes. The engine never appears as a separate `.app` in `/Applications` and is not user-managed.
+MacStream Host **ships the video engine inside the app bundle** as a nested accessory app at `Contents/Resources/sunshine/Sunshine.app`. The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the pinned upstream Sunshine release, verifies its SHA-256, preserves or synthesizes a real `.app` wrapper, and re-signs the nested app plus MacStream helper tools. The engine never appears as a separate top-level app in `/Applications` and is not user-managed.
+
+The nested app layout is intentional. A previous flat helper layout (`Contents/MacOS/MacStreamEngine`) combined with `responsibility_spawnattrs_setdisclaim` caused Sunshine to hang on macOS 26 during AVFoundation/VideoToolbox encoder probing before it opened Moonlight ports. `docs/SUNSHINE_ENGINE_RUNBOOK.md` documents the incident, evidence, validation checklist, and regression guards.
 
 BlackHole is a CoreAudio driver, not a normal resident service, so MacStream Host still downloads and verifies the official `.pkg`, then opens Installer.app for explicit user/admin approval (this will be replaced by an embedded install with Authorization Services in a later phase). The app controls the resulting audio route through detection, settings, config generation, and validation. It does not perform hidden `sudo`, modify firewall settings, open ports, or control external Sunshine processes. It can install/load/unload/remove only its own user LaunchAgent.
 
@@ -64,18 +66,18 @@ BlackHole is a CoreAudio driver, not a normal resident service, so MacStream Hos
 MacStream Host.app/Contents/
 ├── MacOS/
 │   ├── MacStream Host       # SwiftUI app (the user-facing executable)
-│   ├── MacStreamEngine      # Renamed Sunshine binary (sibling of the app)
 │   ├── macstream-agent      # Resident user-LaunchAgent helper
 │   └── macstreamctl         # CLI helper (development / diagnostics)
-├── Frameworks/
-│   ├── libcrypto.3.dylib    # Sunshine deps, signed under same identity
-│   ├── libssl.3.dylib
-│   └── libminiupnpc.21.dylib
 └── Resources/
-    └── assets/              # Sunshine web panel assets (apps.json, web/)
+    └── sunshine/
+        └── Sunshine.app/
+            └── Contents/
+                ├── MacOS/Sunshine
+                ├── Frameworks/
+                └── Resources/assets/
 ```
 
-All four binaries are codesigned with `--identifier org.macstream.host`, with the parent app signed *without* `--deep` so the helper's explicit identifier survives the parent's seal. With ad-hoc signing each binary still has its own `cdhash`, so TCC keys grants per-binary and the user has to add each binary that needs a category (Screen Recording, Accessibility) to the corresponding privacy list manually until a stable code-signing chain (Apple Developer ID or persistent self-signed identity) is in place. See `docs/POST_INSTALL.md` for the user-facing dance.
+The parent app and MacStream-owned helper tools use the `org.macstream.host` identity. The nested Sunshine app uses `org.macstream.host.engine.sunshine` and must be granted Screen Recording separately when macOS requires it. See `docs/POST_INSTALL.md` for the user-facing permission flow.
 
 ### Resident Agent
 
@@ -101,6 +103,10 @@ The resident architecture is user-scoped:
 
 Configuration generation is real and safe: it creates the isolated Sunshine config directory, writes default `sunshine.conf` and `apps.json`, skips existing files unless overwrite is requested, and backs up existing files before replacement. Runtime settings are persisted in `~/Library/Application Support/MacStreamHost/settings.json`.
 
-Sunshine process control is intentionally narrow. `start` requires the isolated config to exist and refuses to launch if another Sunshine process is already running outside MacStream Host ownership. `stop` only sends `SIGTERM` to the recorded owned PID after validating that the current command line still matches the stored binary and config path. Ownership metadata is stored under `~/Library/Application Support/MacStreamHost/run/`. The app does not kill or adopt an existing user-managed Sunshine process. The SwiftUI Sunshine screen calls the same safe manager methods through `AppState`, then refreshes diagnostics and publishes a user-visible operation message.
+Sunshine process control is intentionally narrow. `start` requires the isolated config to exist and refuses to launch if another Sunshine process is already running outside MacStream Host ownership. `stop` only sends `SIGTERM` to the recorded owned PID after validating that the current command line still matches the stored binary and config path. Ownership metadata is stored under `~/Library/Application Support/MacStreamHost/run/`.
+
+Upgrade safety is part of this ownership model: if a stored owned process points to an old binary path but the resolver now points to the nested `Sunshine.app`, `start` terminates the stale owned process, clears metadata, and launches the current engine. `restart` also clears stale ownership mismatch before starting fresh. This prevents a broken legacy `MacStreamEngine` process from being reported as healthy after a package-layout fix.
+
+The app does not kill or adopt an existing user-managed Sunshine process. The SwiftUI Sunshine screen calls the same safe manager methods through `AppState`, then refreshes diagnostics and publishes a user-visible operation message.
 
 LaunchAgent support renders, validates, installs, loads, unloads, and removes only `com.macstream.host.agent` for the current user. It validates the MacStream agent executable and log directory before install/load. Audio diagnostics, network diagnostics, and permission diagnostics remain safe local checks.

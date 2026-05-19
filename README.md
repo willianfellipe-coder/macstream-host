@@ -93,17 +93,17 @@ to be granted before the first Moonlight session works end-to-end:
 
 | Privacy category | Required entries | Why |
 |---|---|---|
-| **Gravação do Áudio do Sistema e da Tela** (Screen Recording) | `MacStream Host` + `MacStreamEngine` | The engine binary captures the screen; the host app shows the UI. |
-| **Acessibilidade** (Accessibility) | `MacStream Host` + `MacStreamEngine` + `macstream-agent` | Required for the engine to inject keyboard events from Moonlight. Without it touchpad still works, keyboard does not. |
+| **Gravação do Áudio do Sistema e da Tela** (Screen Recording) | `MacStream Host` + `MacStream Video Engine` / nested `Sunshine.app` | The engine captures the screen; the host app shows the UI. |
+| **Acessibilidade** (Accessibility) | `MacStream Host`; add `MacStream Video Engine` if input injection fails | Required for keyboard and mouse events from Moonlight. |
 
-Both binaries live inside `/Applications/MacStream Host.app/Contents/MacOS/` and have to be added manually to each list via the `+` button. `docs/POST_INSTALL.md` has the step-by-step.
+The engine lives at `/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app`. It has bundle identifier `org.macstream.host.engine.sunshine`. `docs/POST_INSTALL.md` has the step-by-step, and `docs/SUNSHINE_ENGINE_RUNBOOK.md` records the regression analysis and validation checklist.
 
 The Dashboard detects when the engine reports "no screen capture permission" and surfaces a red banner with two actions:
 
 - **Resetar permissão de Gravação de Tela** — runs `tccutil reset ScreenCapture` for the current identity (`org.macstream.host`) plus the two legacy IDs (`org.macstream.host.engine.sunshine` and `dev.lizardbyte.app.Sunshine`) so stale grants from previous layouts are cleared.
 - **Abrir Ajustes de Gravação de Tela** — jumps straight to the right pane.
 
-Because the project signs ad-hoc by default, every `./scripts/package_dmg.sh` produces a new `cdhash` and TCC invalidates the grants. The `scripts/setup_local_codesign_identity.sh` (work-in-progress) is intended to make `cdhash` stable across builds so the grant survives; while that's in progress, treat the manual re-grant as part of the dev cycle.
+Because the project may be rebuilt frequently during development, restart the engine after any TCC grant change so Sunshine re-evaluates capture trust.
 
 ## Sunshine On macOS
 
@@ -121,7 +121,7 @@ This repository includes:
 - `UPSTREAMS.md` for pinned upstream versions once selected.
 - `docs/gpl-compliance.md` with the release compliance strategy.
 
-The MacStream Host bundle now embeds the Sunshine binary directly (renamed to `MacStreamEngine` inside `Contents/MacOS/`), along with the dylibs Sunshine depends on (`libssl`, `libcrypto`, `libminiupnpc`) in `Contents/Frameworks/` and Sunshine's web assets in `Contents/Resources/assets/`. The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the upstream Sunshine release pinned in `UPSTREAMS.md`, verifies its SHA-256, strips the upstream signature, and re-signs every component with our identity (`Identifier=org.macstream.host`) so the engine inherits the host app's TCC subject.
+The MacStream Host bundle embeds Sunshine as a nested accessory app at `Contents/Resources/sunshine/Sunshine.app`. The build pipeline (`scripts/fetch_sunshine.sh` + `scripts/package_dmg.sh`) pulls the upstream Sunshine release pinned in `UPSTREAMS.md`, verifies its SHA-256, wraps the staged files into the nested app when needed, and re-signs the nested app plus MacStream helper tools. Do not flatten Sunshine into `Contents/MacOS/MacStreamEngine`: that layout regressed macOS 26 capture/encoder startup and prevented Moonlight from connecting.
 
 BlackHole is still downloaded at install time and opened in `Installer.app` rather than embedded — embedding the audio driver is tracked separately (`Fase E v2` in `/Users/will/.claude/plans/nada-ainda-moonlight-ainda-gentle-music.md`).
 
