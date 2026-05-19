@@ -241,11 +241,18 @@ public enum HostPrivacyMode: String, Codable, Equatable, CaseIterable {
     /// Invoke `CGSession -suspend`. May suspend the user's graphical session,
     /// which is unvalidated against Sunshine streaming and therefore experimental.
     case systemSuspend
+    /// Asymmetric secure overlay: a true black NSWindow with mandatory
+    /// password (app pwd or Touch ID/macOS pwd) on every non-streamed
+    /// display, and brightness=0 on the streamed display so SCK never
+    /// sees the overlay. Opt-in — requires at least one auth method
+    /// configured (app password set OR LocalAuthentication available).
+    case secureOverlay
 
     public var displayName: String {
         switch self {
         case .appOverlay: return "Overlay no app (seguro)"
         case .systemSuspend: return "Bloqueio do sistema (experimental)"
+        case .secureOverlay: return "Bloqueio seguro com senha"
         }
     }
 }
@@ -254,21 +261,39 @@ public struct HostPrivacyPolicy: Codable, Equatable {
     public var offerLockOnSessionStart: Bool
     public var allowManualLock: Bool
     public var mode: HostPrivacyMode
+    /// Allow Touch ID / macOS user password (LocalAuthentication) as an
+    /// unlock method when `mode == .secureOverlay`. Ignored for other modes.
+    public var secureAllowMacOSAuthentication: Bool
+    /// Allow the MacStream app password (Keychain) as an unlock method
+    /// when `mode == .secureOverlay`. Ignored for other modes.
+    public var secureAllowAppPassword: Bool
+    /// Cap on consecutive wrong unlock attempts before the secure overlay
+    /// enters a temporal lockout. Backoff is 30s × attempt, capped at 5min.
+    public var secureMaxUnlockAttempts: Int
 
     public init(
         offerLockOnSessionStart: Bool = true,
         allowManualLock: Bool = true,
-        mode: HostPrivacyMode = .appOverlay
+        mode: HostPrivacyMode = .appOverlay,
+        secureAllowMacOSAuthentication: Bool = true,
+        secureAllowAppPassword: Bool = true,
+        secureMaxUnlockAttempts: Int = 5
     ) {
         self.offerLockOnSessionStart = offerLockOnSessionStart
         self.allowManualLock = allowManualLock
         self.mode = mode
+        self.secureAllowMacOSAuthentication = secureAllowMacOSAuthentication
+        self.secureAllowAppPassword = secureAllowAppPassword
+        self.secureMaxUnlockAttempts = secureMaxUnlockAttempts
     }
 
     private enum CodingKeys: String, CodingKey {
         case offerLockOnSessionStart
         case allowManualLock
         case mode
+        case secureAllowMacOSAuthentication
+        case secureAllowAppPassword
+        case secureMaxUnlockAttempts
     }
 
     public init(from decoder: Decoder) throws {
@@ -276,6 +301,9 @@ public struct HostPrivacyPolicy: Codable, Equatable {
         offerLockOnSessionStart = try container.decodeIfPresent(Bool.self, forKey: .offerLockOnSessionStart) ?? true
         allowManualLock = try container.decodeIfPresent(Bool.self, forKey: .allowManualLock) ?? true
         mode = try container.decodeIfPresent(HostPrivacyMode.self, forKey: .mode) ?? .appOverlay
+        secureAllowMacOSAuthentication = try container.decodeIfPresent(Bool.self, forKey: .secureAllowMacOSAuthentication) ?? true
+        secureAllowAppPassword = try container.decodeIfPresent(Bool.self, forKey: .secureAllowAppPassword) ?? true
+        secureMaxUnlockAttempts = try container.decodeIfPresent(Int.self, forKey: .secureMaxUnlockAttempts) ?? 5
     }
 
     public static let defaults = HostPrivacyPolicy()

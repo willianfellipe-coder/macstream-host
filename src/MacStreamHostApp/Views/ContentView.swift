@@ -163,15 +163,13 @@ struct DashboardView: View {
                             Label("Parear dispositivo", systemImage: "ipad.and.arrow.forward")
                         }
 
-                        if appState.privacyOverlayActive {
-                            // Lock is active. Reuse the same dismiss
-                            // action the tray uses so the two surfaces
-                            // stay consistent. When an app password is
-                            // configured the dismiss without a candidate
-                            // would just silently fail — disable the
-                            // inline button in that case and route the
-                            // user to the floating panel (which has the
-                            // password field).
+                        switch appState.privacyOverlayMode {
+                        case .classic:
+                            // Classic dim-only lock. Inline unlock button
+                            // mirrors the tray. When a password is required
+                            // the inline path can't carry one — route the
+                            // user to the floating panel via the disabled
+                            // state.
                             Button {
                                 _ = appState.dismissPrivacyOverlay(passwordCandidate: nil)
                             } label: {
@@ -183,13 +181,26 @@ struct DashboardView: View {
                             .help(appState.overlayUnlockRequiresPassword
                                   ? "Use o painel de desbloqueio para digitar a senha."
                                   : "Restaura o brilho da(s) tela(s) deste Mac.")
-                        } else {
+                        case .secure:
+                            // Secure lock active. The canonical unlock
+                            // surface is the per-display password panel —
+                            // showing a dashboard button here would let the
+                            // remote Moonlight viewer click it through the
+                            // streamed display (since the dashboard window
+                            // is behind brightness=0 but still SCK-visible).
+                            // Render a passive indicator instead.
+                            Label("Host bloqueado (modo seguro)", systemImage: "lock.shield.fill")
+                                .foregroundStyle(.orange)
+                                .help("Desbloqueio acontece pelo painel na tela do Mac.")
+                        case .none:
                             Button {
                                 Task { await appState.lockHostForPrivacy() }
                             } label: {
                                 Label("Bloquear host", systemImage: "lock.display")
                             }
-                            .help("Escurece os displays físicos do Mac sem afetar o stream do Moonlight.")
+                            .help(appState.runtimeSettings.hostPrivacyPolicy.mode == .secureOverlay
+                                  ? "Aciona o modo seguro com overlay preto e desbloqueio por senha. Configure as opções em Ajustes."
+                                  : "Escurece os displays físicos do Mac sem afetar o stream do Moonlight.")
                         }
 
                         Spacer()
@@ -1116,6 +1127,34 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if appState.runtimeSettings.hostPrivacyPolicy.mode == .secureOverlay {
+                GroupBox("Bloqueio seguro") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Permitir Touch ID / senha do macOS", isOn: secureAllowMacOSAuthBinding)
+                        Toggle("Permitir senha do MacStream", isOn: secureAllowAppPasswordBinding)
+                        Stepper(value: secureMaxAttemptsBinding, in: 1...20) {
+                            Text("Tentativas antes do lockout: \(appState.runtimeSettings.hostPrivacyPolicy.secureMaxUnlockAttempts)")
+                        }
+
+                        if !appState.secureUnlockAvailable {
+                            Label(
+                                "Nenhum método de desbloqueio configurado. Defina uma senha do MacStream abaixo OU ative o Touch ID / senha do macOS em Ajustes do Sistema.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Text("Quando o modo é acionado, cada display físico fica preto. O painel de senha aparece apenas em telas não capturadas pelo Moonlight. O cliente remoto continua vendo o desktop normalmente.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
             GroupBox("Menu bar") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Mostrar ícone na barra de menus", isOn: showMenuBarItemBinding)
@@ -1413,12 +1452,47 @@ struct SettingsView: View {
         )
     }
 
+    private var secureAllowMacOSAuthBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.secureAllowMacOSAuthentication = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
+    private var secureAllowAppPasswordBinding: Binding<Bool> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.secureAllowAppPassword = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
+    private var secureMaxAttemptsBinding: Binding<Int> {
+        Binding(
+            get: { appState.runtimeSettings.hostPrivacyPolicy.secureMaxUnlockAttempts },
+            set: { value in
+                var policy = appState.runtimeSettings.hostPrivacyPolicy
+                policy.secureMaxUnlockAttempts = value
+                Task { await appState.updateHostPrivacyPolicy(policy) }
+            }
+        )
+    }
+
     private var hostLockModeExplanation: String {
         switch appState.runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:
             return "Pinta a tela do host de preto apenas para quem estiver fisicamente no Mac. O cliente remoto continua vendo e usando o desktop normalmente — comportamento equivalente ao 'tela em branco' do TeamViewer/AnyDesk."
         case .systemSuspend:
             return "Usa o bloqueio nativo do macOS (CGSession). Ainda não validado em streaming ativo — pode interromper vídeo/áudio/teclado se o macOS suspender a sessão gráfica."
+        case .secureOverlay:
+            return "Overlay preto em TODAS as telas com senha obrigatória — opt-in. Estratégia assimétrica: brightness=0 na tela capturada (invisível ao Moonlight, painel da senha não aparece nela) + overlay preto + senha nas demais. Requer pelo menos uma forma de auth configurada (senha do MacStream OU Touch ID/senha do macOS)."
         }
     }
 

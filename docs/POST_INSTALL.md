@@ -135,6 +135,58 @@ Quem quiser ouvir local **e** transmitir ao mesmo tempo continua podendo
 instalar BlackHole 2ch manualmente (não acompanha o app) e configurar
 um Multi-Output Device em Audio MIDI Setup. Isso é opcional.
 
+## Bloqueio seguro (opt-in)
+
+A partir de 2026-05-18, MacStream Host suporta um modo de bloqueio com
+senha obrigatória que cobre TODAS as telas físicas do Mac com overlay
+preto enquanto o cliente Moonlight continua vendo o desktop normalmente.
+
+### Como ativar
+
+1. **Ajustes → Modo remoto → Modo de bloqueio do host** → escolha
+   `Bloqueio seguro com senha`.
+2. No card "Bloqueio seguro" que aparece logo abaixo:
+   - Mantenha `Permitir Touch ID / senha do macOS` ativo se o Mac já
+     tem senha de usuário configurada. Funciona até em Macs sem Touch
+     ID (fallback automático pra senha).
+   - Mantenha `Permitir senha do MacStream` ativo se você quer usar
+     uma senha dedicada (configure-a em **Ajustes → Senha do app**).
+   - Pelo menos **um** dos dois métodos precisa estar configurado, ou
+     o botão "Bloquear host" recusa a ação e abre Ajustes.
+3. Ajuste `Tentativas antes do lockout` se quiser (default 5). Após
+   exceder, o painel entra em backoff temporal (30s × tentativa extra,
+   cap 5 min). Não é lockout permanente.
+
+### O que acontece quando você clica "Bloquear host"
+
+- **Tela capturada pelo Moonlight** (normalmente o MacBook built-in):
+  brilho vai a 0 (apaga o backlight). **Nenhum NSWindow é criado** aqui
+  — é a única forma comprovada de ficar invisível ao ScreenCaptureKit.
+- **Telas não capturadas** (ex.: LG external): NSWindow preto cobre o
+  display inteiro + `CGSetDisplayTransferByFormula` zera a gamma como
+  backup físico. O painel de senha aparece em uma dessas telas.
+- **Cliente Moonlight**: continua vendo o desktop ao vivo, com mouse e
+  teclado funcionando. Nunca vê o overlay.
+
+### Casos especiais
+
+| Situação | Comportamento |
+|---|---|
+| Único display + Moonlight ativo | Pre-flight rejeita: "Bloqueio seguro precisa de pelo menos uma tela não capturada." Desconecte o cliente ou conecte outra tela antes de bloquear. |
+| Despluga um monitor durante o lock | O controlador observa `didChangeScreenParametersNotification` e reconstrói as janelas. Painel de senha migra para outra tela não capturada. |
+| Esqueceu a senha do MacStream | Use Touch ID / senha do macOS (se ativado). Recovery sem precisar reinstalar. |
+| Quer escapar pelo tray | Em modo seguro, o item de unlock do tray é desabilitado deliberadamente. Desbloqueio só pelo painel local. |
+| Pressiona `Cmd+Q` ou clica fora | Não desbloqueia. O `SecureLockWindow` é key + screenSaver level. |
+| Moonlight desconecta com host travado | Auto-release: o `streamEndWatcher` detecta `CLIENT DISCONNECTED` na sunshine.log e libera (não tem mais cliente pra proteger). |
+
+### Por que não usar só este modo
+
+- `Bloqueio seguro` ainda exige configuração manual (senha) — modo
+  default continua sendo `Overlay no app (seguro)` que só escurece,
+  sem fricção pra novos usuários.
+- Não cobre o caso de display único capturado durante streaming — o
+  modo dim-only continua funcionando nesse cenário.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

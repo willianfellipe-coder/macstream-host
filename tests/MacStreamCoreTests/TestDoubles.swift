@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import CoreGraphics
 import Foundation
 @testable import MacStreamCore
 
@@ -603,7 +604,10 @@ func makeTestAppState(
     privacy: HostPrivacyManaging = MockHostPrivacyManager(),
     remoteWork: RemoteWorkSessionManaging = MockRemoteWorkSessionManager(),
     appPasswordStore: AppPasswordStoring = InMemoryAppPasswordStore(),
-    commandRunner: CommandRunning = CapturingCommandRunner()
+    commandRunner: CommandRunning = CapturingCommandRunner(),
+    localAuthenticationService: LocalAuthenticationServicing = MockLocalAuthenticationService(available: false),
+    displayInventory: DisplayInventoryProviding = MockDisplayInventoryProvider(),
+    dateProvider: @escaping () -> Date = Date.init
 ) -> AppState {
     AppState(
         sunshineManager: sunshine,
@@ -637,8 +641,27 @@ func makeTestAppState(
         hostPrivacyManager: privacy,
         remoteWorkSessionManager: remoteWork,
         appPasswordStore: appPasswordStore,
-        commandRunner: commandRunner
+        commandRunner: commandRunner,
+        localAuthenticationService: localAuthenticationService,
+        displayInventory: displayInventory,
+        dateProvider: dateProvider
     )
+}
+
+/// Two-display inventory used in tests where the streamed display
+/// (id=1) is the built-in and there's a safe non-streamed display
+/// (id=2). Matches the user's real setup (MacBook + LG external).
+final class MockDisplayInventoryProvider: DisplayInventoryProviding, @unchecked Sendable {
+    var displays: [CGDirectDisplayID]
+    var streamed: CGDirectDisplayID
+
+    init(displays: [CGDirectDisplayID] = [1, 2], streamed: CGDirectDisplayID = 1) {
+        self.displays = displays
+        self.streamed = streamed
+    }
+
+    func activeDisplayIDs() -> [CGDirectDisplayID] { displays }
+    func streamedDisplayID() -> CGDirectDisplayID { streamed }
 }
 
 final class CapturingCommandRunner: CommandRunning {

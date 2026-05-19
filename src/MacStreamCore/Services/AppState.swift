@@ -1,10 +1,93 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Combine
+import CoreGraphics
 import Foundation
 #if os(macOS)
 import AppKit
 #endif
+
+/// Discriminates the kind of privacy overlay currently active. The
+/// dashboard and tray surfaces read this to pick the right unlock UI;
+/// the app-level `PrivacyOverlayController` reads it to pick the
+/// rendering strategy (small floating panel vs full-screen secure
+/// overlay).
+public enum PrivacyOverlayMode: Equatable {
+    case none
+    /// Classic dim-only mode — `lockHostForPrivacy()` with
+    /// `HostPrivacyMode.appOverlay`. Brightness/gamma only, no
+    /// mandatory password.
+    case classic
+    /// Asymmetric secure overlay — `HostPrivacyMode.secureOverlay`.
+    /// Full-screen black NSWindow on every non-streamed display with
+    /// mandatory password, brightness=0 on the streamed display.
+    case secure
+}
+
+/// Errors thrown by the secure-lock pre-flight. Surfaced to the UI so
+/// the dashboard / tray can present a recovery sheet instead of failing
+/// silently or entering a broken state.
+public enum SecureLockError: Error, LocalizedError, Equatable {
+    /// No unlock method available: no app password set AND
+    /// LocalAuthentication unavailable on this Mac. UI should route the
+    /// user to Settings → Senha do app or to System Settings → Touch ID
+    /// & Senha.
+    case noAuthAvailable
+    /// Streaming is active and the host has only one display — the same
+    /// one Sunshine is capturing. There is no safe display to host the
+    /// password panel without leaking into the Moonlight feed. UI should
+    /// ask the user to disconnect Moonlight or plug in a second display
+    /// before locking.
+    case noSafeDisplayDuringStream
+    /// The user is in the temporal lockout window after too many failed
+    /// attempts. UI should display the wait time.
+    case lockedOut(secondsRemaining: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .noAuthAvailable:
+            return "Bloqueio seguro exige uma forma de desbloqueio. Configure uma senha do MacStream em Ajustes ou ative Touch ID / senha do macOS."
+        case .noSafeDisplayDuringStream:
+            return "Bloqueio seguro precisa de pelo menos uma tela não capturada pelo Moonlight. Desconecte a sessão ou conecte outro display antes de bloquear."
+        case .lockedOut(let secondsRemaining):
+            return "Tentativas excedidas. Aguarde \(secondsRemaining) segundos antes de tentar novamente."
+        }
+    }
+}
+
+/// Tiny provider so AppState can run the secure-lock pre-flight (count
+/// physical displays + know which is being streamed) without depending
+/// on AppKit. The default implementation uses CoreGraphics; tests inject
+/// a stub.
+public protocol DisplayInventoryProviding: Sendable {
+    /// Active physical display IDs (built-in + connected externals,
+    /// minus Sidecar / AirPlay). Empty if CoreGraphics fails.
+    func activeDisplayIDs() -> [CGDirectDisplayID]
+    /// Display Sunshine captures into the Moonlight stream — currently
+    /// `CGMainDisplayID()` by Sunshine convention.
+    func streamedDisplayID() -> CGDirectDisplayID
+}
+
+public struct DefaultDisplayInventoryProvider: DisplayInventoryProviding {
+    public init() {}
+
+    public func activeDisplayIDs() -> [CGDirectDisplayID] {
+        var displayCount: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &displayCount) == .success, displayCount > 0 else {
+            return []
+        }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        var actualCount: UInt32 = 0
+        guard CGGetActiveDisplayList(displayCount, &ids, &actualCount) == .success else {
+            return []
+        }
+        return Array(ids.prefix(Int(actualCount)))
+    }
+
+    public func streamedDisplayID() -> CGDirectDisplayID {
+        CGMainDisplayID()
+    }
+}
 
 @MainActor
 public final class AppState: ObservableObject {
@@ -29,11 +112,28 @@ public final class AppState: ObservableObject {
     @Published public private(set) var hostPrivacyStatus: HostPrivacyStatus
     @Published public private(set) var lastPermissionRequestResults: [PermissionRequestResult]
     @Published public private(set) var lastAgentRecoveryAttempt: Date?
-    @Published public var privacyOverlayActive: Bool = false
+    /// Discriminates which overlay (classic vs secure) is currently
+    /// covering the host. `.none` means the host is unlocked. UI surfaces
+    /// pick the right unlock control by reading this enum.
+    @Published public private(set) var privacyOverlayMode: PrivacyOverlayMode = .none
+    /// Backwards-compatible read for callers that only need "is the host
+    /// locked at all" — both .classic and .secure return true. Maps
+    /// directly onto the @Published mode so SwiftUI re-renders correctly.
+    public var privacyOverlayActive: Bool { privacyOverlayMode != .none }
+    /// While set, the secure overlay is in temporal lockout after too
+    /// many failed unlock attempts. UI displays a countdown.
+    @Published public private(set) var secureLockoutUntil: Date?
     @Published public private(set) var isAppPasswordSet: Bool = false
+
+    /// Transient counter (in-memory) — number of consecutive failed
+    /// unlock attempts in the current lock session. Reset to 0 on
+    /// successful auth or on a fresh lock.
+    private var secureUnlockAttempts: Int = 0
 
     public let appPasswordStore: AppPasswordStoring
     public let commandRunner: CommandRunning
+    public let localAuthenticationService: LocalAuthenticationServicing
+    public let displayInventory: DisplayInventoryProviding
 
     private let agentRecoveryCooldown: TimeInterval = 60
     private let dateProvider: () -> Date
@@ -111,11 +211,15 @@ public final class AppState: ObservableObject {
         remoteWorkSessionManager: RemoteWorkSessionManaging? = nil,
         appPasswordStore: AppPasswordStoring? = nil,
         commandRunner: CommandRunning = ProcessCommandRunner(),
+        localAuthenticationService: LocalAuthenticationServicing? = nil,
+        displayInventory: DisplayInventoryProviding = DefaultDisplayInventoryProvider(),
         dateProvider: @escaping () -> Date = Date.init
     ) {
         self.dateProvider = dateProvider
         self.appPasswordStore = appPasswordStore ?? KeychainAppPasswordStore()
         self.commandRunner = commandRunner
+        self.localAuthenticationService = localAuthenticationService ?? DefaultLocalAuthenticationService()
+        self.displayInventory = displayInventory
         self.sunshineManager = sunshineManager
         self.blackHoleManager = blackHoleManager
         self.dependencyInstallerManager = dependencyInstallerManager
@@ -563,13 +667,131 @@ public final class AppState: ObservableObject {
     public func lockHostForPrivacy() async {
         switch runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:
-            privacyOverlayActive = true
+            privacyOverlayMode = .classic
             lastOperationMessage = "Tela do host ocultada. O cliente remoto continua vendo o desktop. Clique 'Desbloquear' no Mac para sair."
             startStreamEndWatcher()
         case .systemSuspend:
             await runRemoteWorkOperation {
                 try await remoteWorkSessionManager.lockHostForPrivacy()
             }
+        case .secureOverlay:
+            do {
+                try enterSecureLockPreflight()
+            } catch let error as SecureLockError {
+                lastOperationMessage = error.errorDescription
+                return
+            } catch {
+                lastOperationMessage = error.localizedDescription
+                return
+            }
+            secureUnlockAttempts = 0
+            secureLockoutUntil = nil
+            privacyOverlayMode = .secure
+            lastOperationMessage = "Host bloqueado com senha. Desbloqueio acontece na tela do Mac — o cliente remoto continua usando o desktop."
+            startStreamEndWatcher()
+        }
+    }
+
+    /// True when the user can actually unlock the secure overlay — at
+    /// least one of the policy-enabled methods has its dependency
+    /// satisfied (password set OR LocalAuth available).
+    public var secureUnlockAvailable: Bool {
+        let policy = runtimeSettings.hostPrivacyPolicy
+        let pwdReady = policy.secureAllowAppPassword && isAppPasswordSet
+        let laReady = policy.secureAllowMacOSAuthentication && localAuthenticationService.isAvailable()
+        return pwdReady || laReady
+    }
+
+    /// Pre-flight runs synchronously before flipping the overlay mode.
+    /// Throws `SecureLockError` cases the UI can match on.
+    public func enterSecureLockPreflight() throws {
+        guard secureUnlockAvailable else {
+            throw SecureLockError.noAuthAvailable
+        }
+        // During an active stream, we need at least one display that
+        // Sunshine ISN'T capturing — that's where the password panel
+        // renders without leaking. Single-display streamed hosts can
+        // only enter secure lock after disconnecting Moonlight.
+        let streaming = remoteWorkSession.state.isStreamingActive
+        if streaming {
+            let displays = displayInventory.activeDisplayIDs()
+            let streamed = displayInventory.streamedDisplayID()
+            let safeDisplays = displays.filter { $0 != streamed }
+            if safeDisplays.isEmpty {
+                throw SecureLockError.noSafeDisplayDuringStream
+            }
+        }
+        if let until = secureLockoutUntil, until > dateProvider() {
+            let seconds = Int(until.timeIntervalSince(dateProvider()).rounded(.up))
+            throw SecureLockError.lockedOut(secondsRemaining: seconds)
+        }
+    }
+
+    /// Manual unlock with the MacStream app password. Returns true on
+    /// success. On failure increments the attempt counter and, when the
+    /// cap is reached, sets `secureLockoutUntil` to a temporal backoff
+    /// window. The UI reads `secureLockoutUntil` to render the countdown.
+    @discardableResult
+    public func dismissSecureOverlay(withAppPassword candidate: String) -> Bool {
+        guard privacyOverlayMode == .secure else { return false }
+        if let until = secureLockoutUntil, until > dateProvider() { return false }
+        guard runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword else {
+            lastOperationMessage = "Desbloqueio por senha do MacStream está desativado nas configurações."
+            return false
+        }
+        if appPasswordStore.verify(candidate) {
+            return finishSecureUnlock()
+        }
+        registerFailedSecureAttempt()
+        return false
+    }
+
+    /// Manual unlock via Touch ID / macOS user password. Triggers the
+    /// system auth dialog. Returns true on success.
+    @discardableResult
+    public func dismissSecureOverlay(withBiometrics _: Void = ()) async -> Bool {
+        guard privacyOverlayMode == .secure else { return false }
+        if let until = secureLockoutUntil, until > dateProvider() { return false }
+        guard runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication else {
+            lastOperationMessage = "Desbloqueio por Touch ID / senha do macOS está desativado nas configurações."
+            return false
+        }
+        do {
+            let ok = try await localAuthenticationService.authenticate(
+                reason: "Desbloquear o MacStream Host"
+            )
+            if ok {
+                return finishSecureUnlock()
+            }
+            registerFailedSecureAttempt()
+            return false
+        } catch {
+            lastOperationMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    private func finishSecureUnlock() -> Bool {
+        secureUnlockAttempts = 0
+        secureLockoutUntil = nil
+        streamEndWatcher?.cancel()
+        streamEndWatcher = nil
+        privacyOverlayMode = .none
+        lastOperationMessage = "Host desbloqueado."
+        return true
+    }
+
+    private func registerFailedSecureAttempt() {
+        secureUnlockAttempts += 1
+        let max = runtimeSettings.hostPrivacyPolicy.secureMaxUnlockAttempts
+        if secureUnlockAttempts >= max {
+            // Backoff: 30s × (attempts - max + 1), capped at 5 min.
+            let extra = secureUnlockAttempts - max + 1
+            let seconds = min(30 * extra, 300)
+            secureLockoutUntil = dateProvider().addingTimeInterval(TimeInterval(seconds))
+            lastOperationMessage = "Tentativas excedidas. Aguarde \(seconds) segundos antes de tentar novamente."
+        } else {
+            lastOperationMessage = "Senha incorreta. Tente novamente."
         }
     }
 
@@ -588,7 +810,13 @@ public final class AppState: ObservableObject {
             while !Task.isCancelled {
                 guard let self, self.privacyOverlayActive else { return }
                 if SunshineSessionTracker.sessionEndedAfter(activatedAt) {
-                    _ = self.dismissPrivacyOverlay(passwordCandidate: nil, autoTriggered: true)
+                    // Auto-release works for both classic and secure modes —
+                    // there's no remote viewer left to protect against.
+                    self.streamEndWatcher?.cancel()
+                    self.streamEndWatcher = nil
+                    self.secureUnlockAttempts = 0
+                    self.secureLockoutUntil = nil
+                    self.privacyOverlayMode = .none
                     self.lastOperationMessage = "Sessão Moonlight encerrou. Tela do host restaurada automaticamente."
                     return
                 }
@@ -628,6 +856,14 @@ public final class AppState: ObservableObject {
 
     @discardableResult
     private func dismissPrivacyOverlay(passwordCandidate: String?, autoTriggered: Bool) -> Bool {
+        // Secure mode has its own dismiss methods (`dismissSecureOverlay`)
+        // with the lockout / biometrics paths. The classic dismiss route
+        // never grants secure unlock — that would bypass the password
+        // gate that defines secure mode.
+        if privacyOverlayMode == .secure, !autoTriggered {
+            lastOperationMessage = "Use o painel de bloqueio seguro na tela do Mac para desbloquear."
+            return false
+        }
         // Auto-triggered dismisses come from the stream-end watcher and skip
         // the password gate — the remote user is gone, so there's nothing to
         // protect against. Manual dismisses still require the password when
@@ -641,7 +877,7 @@ public final class AppState: ObservableObject {
         }
         streamEndWatcher?.cancel()
         streamEndWatcher = nil
-        privacyOverlayActive = false
+        privacyOverlayMode = .none
         if !autoTriggered {
             lastOperationMessage = "Tela do host restaurada."
         }

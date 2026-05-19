@@ -4,6 +4,88 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Secure lock mode: black overlay with mandatory password unlock (2026-05-18)
+
+User report: the existing "Bloquear host" only dimmed displays — anyone
+physically at the Mac could wake the panel and see the desktop, which
+isn't a real security boundary. Implemented an opt-in **Modo bloqueio
+seguro** that lives alongside the existing dim-only mode (selectable in
+Settings → Modo de bloqueio do host).
+
+**Strategy: asymmetric per-display rendering.** A documented
+ScreenCaptureKit limitation on macOS Sequoia/26 means
+`NSWindow.sharingType = .none` is not a reliable exclusion mechanism —
+a black full-screen NSWindow on the streamed display would leak into
+the Moonlight feed. The only proven invisible-to-SCK technique is
+`brightness=0` on the panel itself (panel-side, SCK never sees it).
+
+Per-display behavior when secure lock activates:
+
+| Display | Streaming OFF | Streaming ON, NOT captured | Streaming ON, IS captured |
+|---|---|---|---|
+| Built-in MacBook | NSWindow preto + brightness=0 + gamma=0 | NSWindow preto + brightness=0 + gamma=0 | **brightness=0 só** (sem NSWindow, sem UI) |
+| LG external | NSWindow preto + gamma=0 | NSWindow preto + gamma=0 | brightness path (no-op) + sem NSWindow |
+| Painel de senha | em qualquer | só nos não-capturados | só nos não-capturados |
+
+**Pre-flight rejects two cases**:
+- No unlock method available (no app password set AND LocalAuth
+  unavailable). User is routed to Settings → Bloqueio seguro.
+- Streaming + only display is the streamed one. User must disconnect
+  Moonlight or plug a second display before locking.
+
+**Auth methods (both opt-in via Settings)**:
+- **MacStream app password** (existing `AppPasswordStore`, Keychain).
+- **Touch ID / senha do macOS** via new
+  [LocalAuthenticationService.swift](src/MacStreamCore/Managers/LocalAuthenticationService.swift)
+  (wraps `LAContext.evaluatePolicy(.deviceOwnerAuthentication)`).
+
+**Anti-bypass**:
+- The classic `dismissPrivacyOverlay(passwordCandidate: nil)` (tray
+  bypass) **refuses** to unlock when mode is `.secure`. Test coverage:
+  `testClassicDismissDoesNotUnlockSecureMode`. The tray item is
+  replaced with a passive indicator during secure mode.
+- The dashboard also hides its inline unlock button in secure mode —
+  the remote Moonlight viewer could otherwise click it through the
+  streamed display.
+- `SecureLockWindow.sendEvent(_:)` filters keyboard events by
+  `kCGEventSourceStateID`: real HID (state == 1) passes, synthetic
+  injection from `CGEventPost` (state ∈ {0, -1}) is dropped. So even
+  if focus accidentally lands on the password SecureField, Sunshine
+  can't type into it from the remote client.
+
+**Lockout**:
+- Configurable `secureMaxUnlockAttempts` (default 5). On hit, enters a
+  temporal lockout (30s × extra attempt, capped at 5min) — modeled as
+  `@Published secureLockoutUntil: Date?`. Counter resets on successful
+  auth. **Temporal**, not permanent — no risk of being permanently
+  locked out.
+
+**Multi-display geometry change**:
+- `PrivacyOverlayController` observes
+  `NSApplication.didChangeScreenParametersNotification` while in
+  secure mode and rebuilds the per-display window stack when the user
+  plugs/unplugs a monitor.
+
+**Auto-release on Moonlight disconnect**:
+- Existing `streamEndWatcher` is reused for secure mode too — once
+  the remote viewer disconnects there's nothing to protect against,
+  so the lock auto-releases (matches classic mode UX).
+
+**Files**:
+- New: [src/MacStreamCore/Managers/LocalAuthenticationService.swift](src/MacStreamCore/Managers/LocalAuthenticationService.swift)
+- New: [src/MacStreamHostApp/Views/SecureLockOverlayContent.swift](src/MacStreamHostApp/Views/SecureLockOverlayContent.swift)
+- Modified: [DomainModels.swift](src/MacStreamCore/Models/DomainModels.swift) (HostPrivacyMode adds `.secureOverlay`; HostPrivacyPolicy adds three secure-* fields with backwards-compatible Codable migration)
+- Modified: [AppState.swift](src/MacStreamCore/Services/AppState.swift) (PrivacyOverlayMode enum replaces the single Bool; pre-flight, lockout, biometric/password dismiss methods; DisplayInventoryProviding for testability)
+- Modified: [PrivacyOverlayController.swift](src/MacStreamHostApp/Views/PrivacyOverlayController.swift) (Mode-based `show()`; asymmetric per-display rendering; SecureLockWindow with HID-only event filter)
+- Modified: [MacStreamHostApp.swift](src/MacStreamHostApp/MacStreamHostApp.swift) (routes on `privacyOverlayMode` enum; passes SecureContext closures to the controller)
+- Modified: [ContentView.swift](src/MacStreamHostApp/Views/ContentView.swift) (dashboard button switches on mode; new "Bloqueio seguro" Settings GroupBox)
+- Modified: [MenuBarContent.swift](src/MacStreamHostApp/Views/MenuBarContent.swift) (tray item disabled in secure mode)
+
+**Tests**: 16 new tests bring the suite to 151/151.
+- 9 in `AppStateTests` covering pre-flight (no auth, biometric available, app password set), correct/wrong password, biometric path, lockout temporal backoff, classic-dismiss-refuses-secure.
+- 4 in new `LocalAuthenticationServiceTests` covering the mock's availability/auth/error paths.
+- 4 in new `HostPrivacyPolicyCodableTests` covering legacy JSON decode (no secure fields) + round-trip preservation + defaults backwards compatibility.
+
 ### Document the iPad cursor duplication (2026-05-18)
 
 User report: with the iPad on a Magic Keyboard / external mouse, the

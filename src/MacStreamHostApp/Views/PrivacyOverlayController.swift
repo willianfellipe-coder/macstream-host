@@ -6,67 +6,95 @@ import SwiftUI
 
 @MainActor
 final class PrivacyOverlayController {
+    enum Mode {
+        /// Classic dim-only privacy lock. Floating unlock panel + dim of
+        /// physical displays. Equivalent to the pre-secure behavior.
+        case classic(suppressPanel: Bool)
+        /// Asymmetric secure overlay: full-screen black NSWindow on every
+        /// non-streamed display (with the password panel on a safe one),
+        /// brightness-only on the streamed display so SCK never sees the
+        /// overlay. Mandatory password unlock.
+        case secure(streamingActive: Bool, streamedDisplayID: CGDirectDisplayID?)
+    }
+
+    /// Bundle of closures the secure overlay needs. Kept as a struct so
+    /// the controller signature stays manageable and tests can inject
+    /// fixed values without subclassing.
+    struct SecureContext {
+        let allowMacOSAuthentication: () -> Bool
+        let allowAppPassword: () -> Bool
+        let macOSAuthAvailable: () -> Bool
+        let isAppPasswordSet: () -> Bool
+        let lockoutUntil: () -> Date?
+        /// Fire-and-forget: kicks off the LocalAuthentication prompt.
+        /// AppState flips `privacyOverlayMode` on success, which the App
+        /// layer's `onChange` observer routes back to `hide()`.
+        let onBiometric: () -> Void
+        /// Synchronous: returns true on correct password (AppState will
+        /// already have transitioned to `.none`).
+        let onAppPassword: (String) -> Bool
+    }
+
     private let brightness = DisplayBrightnessController()
     private var unlockPanel: NSWindow?
+    private var secureWindows: [NSWindow] = []
     private var lastResult: DisplayDimResult?
     private let requiresPassword: () -> Bool
     private let onUnlock: (String?) -> Bool
     private let onDimResult: (DisplayDimResult) -> Void
+    private let secureContext: SecureContext?
+
+    /// Active secure-mode parameters, captured at `show(...)` time so the
+    /// screen-parameter observer can rebuild without re-resolving.
+    private var activeSecureMode: (streamingActive: Bool, streamedDisplayID: CGDirectDisplayID?)?
+    private var screenObserver: NSObjectProtocol?
 
     init(
         requiresPassword: @escaping () -> Bool,
         onUnlock: @escaping (String?) -> Bool,
-        onDimResult: @escaping (DisplayDimResult) -> Void = { _ in }
+        onDimResult: @escaping (DisplayDimResult) -> Void = { _ in },
+        secureContext: SecureContext? = nil
     ) {
         self.requiresPassword = requiresPassword
         self.onUnlock = onUnlock
         self.onDimResult = onDimResult
+        self.secureContext = secureContext
     }
 
     var lastDimSummary: String? { lastResult?.summary }
 
-    /// Drops every physical display except the one hosting the dashboard
-    /// to brightness 0 (built-in) or zero gamma (external), so the local
-    /// viewer goes dark while the framebuffer continues to be produced
-    /// normally — Moonlight keeps seeing the live desktop and the remote
-    /// user can keep working through the Mac. The dashboard's display
-    /// stays lit so the floating unlock panel (and the dashboard "Bloquear"
-    /// button) remain visible to the local user; otherwise gamma=0 / brightness=0
-    /// would also hide the unlock UI itself.
-    ///
-    /// Sidecar/AirPlay displays are skipped because dimming a wireless
-    /// display can affect its framebuffer. When the caller passes
-    /// `suppressPanel: true` (because a Moonlight session is active), we
-    /// deliberately skip the floating unlock panel: even with
-    /// `sharingType = .none`, ScreenCaptureKit on macOS Sequoia still
-    /// leaks the panel into the captured frame and the panel intercepts
-    /// forwarded remote input. In that case the remote user can unlock
-    /// through the menu bar instead.
-    func show(suppressPanel: Bool = false) {
-        guard unlockPanel == nil else { return }
+    // MARK: - Public entry point
 
-        // Pick the display we keep lit so the unlock UI stays visible to
-        // the local user. Preference order:
-        //   1. The display containing the currently-key (focused) window
-        //   2. The display containing any visible MacStream main window
-        //   3. NSScreen.main (the menu-bar screen)
-        //
-        // When `suppressPanel = true` there is no floating unlock panel
-        // to keep visible — the engine is actively streaming and the
-        // local user is using the iPad. In that mode every display
-        // gets a chance to dim (within the streaming-safe knobs), and
-        // unlocking is routed through the menu bar.
+    /// Routes to the right rendering strategy for the requested mode.
+    /// `hide()` is the unconditional inverse for both.
+    func show(mode: Mode) {
+        switch mode {
+        case .classic(let suppressPanel):
+            showClassic(suppressPanel: suppressPanel)
+        case .secure(let streamingActive, let streamedDisplayID):
+            showSecure(streamingActive: streamingActive, streamedDisplayID: streamedDisplayID)
+        }
+    }
+
+    // MARK: - Classic mode (existing behavior)
+
+    /// Classic dim path. Drops every physical display except the one
+    /// hosting the dashboard to brightness 0 (built-in) or zero gamma
+    /// (external). Optionally shows a floating unlock panel on the
+    /// dashboard's screen. See the design notes inline for why the panel
+    /// is suppressed during streaming.
+    private func showClassic(suppressPanel: Bool) {
+        guard unlockPanel == nil, secureWindows.isEmpty else { return }
+
         let hostScreen = interactiveScreen() ?? NSScreen.main
         let keepLitDisplayID = suppressPanel
             ? nil
             : hostScreen.flatMap { displayID(for: $0) }
 
         // The Sunshine engine captures `CGMainDisplayID()` by default.
-        // Telling the dim controller about it means gamma blackout is
-        // skipped specifically for that display while the brightness
-        // paths (panel backlight only — invisible to ScreenCaptureKit)
-        // still run. So the built-in MacBook lid still goes dark while
-        // the remote feed keeps painting normally.
+        // Telling the dim controller about it skips gamma blackout
+        // specifically for that display while brightness paths (panel
+        // backlight only — invisible to SCK) still run.
         let mainDisplay = CGMainDisplayID()
 
         let result = brightness.dimAllDisplays(
@@ -126,6 +154,189 @@ final class PrivacyOverlayController {
         }
     }
 
+    // MARK: - Secure mode
+
+    /// Asymmetric secure overlay. Designed around a documented
+    /// ScreenCaptureKit limitation: `NSWindow.sharingType = .none` is
+    /// not a reliable exclusion mechanism on macOS Sequoia/26 — black
+    /// NSWindows on the streamed display still leak into the Moonlight
+    /// feed. The only proven invisible-to-SCK technique is dropping
+    /// brightness on the panel itself, which the GPU framebuffer (what
+    /// SCK samples) never sees.
+    ///
+    /// Per-display strategy:
+    ///   - Streamed display (Sunshine's capture target), while streaming:
+    ///       brightness=0 only. NO NSWindow, no password UI. The local
+    ///       viewer sees a dark panel, the remote viewer keeps seeing
+    ///       the live desktop.
+    ///   - Every other display: a full-screen black NSWindow covering
+    ///       the entire `screen.frame` (including the menu bar area),
+    ///       with the password panel hosted on the "safe display"
+    ///       (NSScreen.main if it's non-streamed, otherwise the first
+    ///       non-streamed screen). Remaining non-streamed displays get
+    ///       a pure-black panel.
+    ///
+    /// When `streamingActive = false`, every display gets the secure
+    /// window — Sunshine isn't sampling anything so there's nothing to
+    /// leak into.
+    private func showSecure(streamingActive: Bool, streamedDisplayID: CGDirectDisplayID?) {
+        // Tear down any classic surfaces left over from a previous mode.
+        unlockPanel?.orderOut(nil)
+        unlockPanel = nil
+        secureWindows.forEach { $0.orderOut(nil) }
+        secureWindows.removeAll()
+
+        activeSecureMode = (streamingActive, streamedDisplayID)
+
+        let screens = NSScreen.screens
+        let safeScreen = pickSafeScreen(among: screens, streamedDisplayID: streamedDisplayID, streamingActive: streamingActive)
+
+        for screen in screens {
+            let id = displayID(for: screen)
+            // Skip the streamed display while streaming — never render a
+            // window there because it would leak into SCK.
+            if streamingActive, let streamedDisplayID, id == streamedDisplayID {
+                continue
+            }
+            let isSafePanel = (screen === safeScreen)
+            let window = makeSecureWindow(on: screen, withUnlockPanel: isSafePanel)
+            secureWindows.append(window)
+            window.orderFrontRegardless()
+            if isSafePanel {
+                // Only the safe-panel window becomes key — that's where
+                // the user types the password. Other displays are pure
+                // black; they don't need keyboard focus.
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+
+        // Belt-and-suspenders dim: even though the windows cover every
+        // non-streamed display, applying brightness=0 to the streamed
+        // display (panel-only, invisible to SCK) physically darkens the
+        // local view of the captured desktop. Without this the user sees
+        // the live desktop on their built-in panel while typing on the LG.
+        let result = brightness.dimAllDisplays(
+            except: nil,
+            streamedDisplayID: streamingActive ? streamedDisplayID : nil,
+            streamingActive: streamingActive
+        )
+        lastResult = result
+        onDimResult(result)
+
+        // Watch for monitor (un)plug events so we don't end up with
+        // stale windows on a display that's gone or a missing window on
+        // a display that just appeared.
+        installScreenObserverIfNeeded()
+
+        // During streaming, DO NOT activate the app — that would
+        // redirect Sunshine's CGEventPost-injected events into our
+        // SecureField. The user clicks the secure window's password
+        // field locally to focus it (which is real HID, OK).
+        if !streamingActive {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    /// Builds a single per-display secure window. When `withUnlockPanel`
+    /// is true the SwiftUI password panel is hosted as the contentView;
+    /// otherwise the window stays pure black with no controls.
+    private func makeSecureWindow(on screen: NSScreen, withUnlockPanel: Bool) -> SecureLockWindow {
+        let window = SecureLockWindow(
+            contentRect: screen.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        window.level = .screenSaver
+        window.backgroundColor = .black
+        window.isOpaque = true
+        window.hasShadow = false
+        window.sharingType = .none
+        window.ignoresMouseEvents = false
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+
+        if withUnlockPanel, let context = secureContext {
+            let hosting = NSHostingController(
+                rootView: SecureLockOverlayContent(
+                    allowMacOSAuthentication: context.allowMacOSAuthentication(),
+                    allowAppPassword: context.allowAppPassword(),
+                    macOSAuthAvailable: context.macOSAuthAvailable(),
+                    isAppPasswordSet: context.isAppPasswordSet(),
+                    lockoutUntil: context.lockoutUntil(),
+                    onBiometric: { context.onBiometric() },
+                    onAppPassword: { candidate in _ = context.onAppPassword(candidate) }
+                )
+            )
+            hosting.view.frame = NSRect(origin: .zero, size: screen.frame.size)
+            window.contentView = hosting.view
+        } else {
+            let blackView = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            blackView.wantsLayer = true
+            blackView.layer?.backgroundColor = NSColor.black.cgColor
+            window.contentView = blackView
+        }
+        return window
+    }
+
+    /// Picks the display the user will see the password panel on.
+    /// Priority:
+    ///   1. NSScreen.main if it's NOT the streamed display (or no
+    ///      streaming is active)
+    ///   2. First screen in `NSScreen.screens` whose displayID != streamed
+    ///   3. Any screen — the streaming-active guard above already
+    ///      rejected single-display streamed scenarios at the AppState
+    ///      pre-flight, so we should never fall through to "all screens
+    ///      are streamed" in practice
+    private func pickSafeScreen(
+        among screens: [NSScreen],
+        streamedDisplayID: CGDirectDisplayID?,
+        streamingActive: Bool
+    ) -> NSScreen? {
+        if !streamingActive || streamedDisplayID == nil {
+            return NSScreen.main ?? screens.first
+        }
+        if let main = NSScreen.main, displayID(for: main) != streamedDisplayID {
+            return main
+        }
+        for screen in screens where displayID(for: screen) != streamedDisplayID {
+            return screen
+        }
+        return nil
+    }
+
+    private func installScreenObserverIfNeeded() {
+        guard screenObserver == nil else { return }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.rebuildSecureWindowsAfterScreenChange()
+            }
+        }
+    }
+
+    private func removeScreenObserver() {
+        if let observer = screenObserver {
+            NotificationCenter.default.removeObserver(observer)
+            screenObserver = nil
+        }
+    }
+
+    private func rebuildSecureWindowsAfterScreenChange() {
+        guard let mode = activeSecureMode else { return }
+        // Tear everything down and recreate from scratch — simpler than
+        // diffing screens, and rare enough (plug/unplug events) that the
+        // brief flicker is acceptable.
+        secureWindows.forEach { $0.orderOut(nil) }
+        secureWindows.removeAll()
+        showSecure(streamingActive: mode.streamingActive, streamedDisplayID: mode.streamedDisplayID)
+    }
+
+    // MARK: - Screen helpers
+
     /// Returns the screen the user is actively interacting with, falling
     /// through a priority chain: key window → main window → any visible
     /// main window → nil. The lock UX positions the unlock panel here
@@ -152,10 +363,16 @@ final class PrivacyOverlayController {
         return CGDirectDisplayID(value.uint32Value)
     }
 
+    // MARK: - Hide
+
     func hide() {
         brightness.restoreAllDisplays()
         unlockPanel?.orderOut(nil)
         unlockPanel = nil
+        secureWindows.forEach { $0.orderOut(nil) }
+        secureWindows.removeAll()
+        activeSecureMode = nil
+        removeScreenObserver()
         lastResult = nil
     }
 }
@@ -163,6 +380,38 @@ final class PrivacyOverlayController {
 private final class KeyableBorderlessWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+/// Borderless full-screen window for the secure-lock overlay. Same
+/// canBecomeKey contract as `KeyableBorderlessWindow`, plus an event
+/// filter that drops synthetic keyboard input (CGEventPost from the
+/// Moonlight engine). Real HID events pass through. This prevents the
+/// remote user from typing into the password field even if focus
+/// accidentally ends up here.
+private final class SecureLockWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        // Only filter keyboard events — mouse events from the local
+        // user (real HID) and synthetic mouse events from Sunshine on
+        // OTHER displays don't reach this window anyway.
+        switch event.type {
+        case .keyDown, .keyUp, .flagsChanged:
+            if let cgEvent = event.cgEvent {
+                let stateID = cgEvent.getIntegerValueField(.eventSourceStateID)
+                // kCGEventSourceStateHIDSystemState = 1 → real keyboard.
+                // Anything else (0 = combined session, -1 = private) is
+                // synthetic injection. Drop it.
+                if stateID != 1 {
+                    return
+                }
+            }
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
 }
 
 struct PrivacyOverlayContent: View {

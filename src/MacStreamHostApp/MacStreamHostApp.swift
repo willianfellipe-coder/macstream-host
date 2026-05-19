@@ -142,12 +142,16 @@ struct MacStreamHostApp: App {
                             },
                             onDimResult: { [weak appState] result in
                                 appState?.reportPrivacyLockDimResult(result.summary, didDimAny: result.didDimAny)
-                            }
+                            },
+                            secureContext: makeSecureContext()
                         )
                     }
                 }
-                .onChange(of: appState.privacyOverlayActive) { _, isActive in
-                    if isActive {
+                .onChange(of: appState.privacyOverlayMode) { _, mode in
+                    switch mode {
+                    case .none:
+                        privacyOverlayController?.hide()
+                    case .classic:
                         // Suppress the floating unlock panel while a Moonlight
                         // session is active: the panel renders a black-ish
                         // surface that ScreenCaptureKit still picks up despite
@@ -156,10 +160,17 @@ struct MacStreamHostApp: App {
                         // streaming, only dim physical displays; the remote
                         // user unlocks via the menu bar item.
                         privacyOverlayController?.show(
-                            suppressPanel: appState.remoteWorkSession.state.isStreamingActive
+                            mode: .classic(
+                                suppressPanel: appState.remoteWorkSession.state.isStreamingActive
+                            )
                         )
-                    } else {
-                        privacyOverlayController?.hide()
+                    case .secure:
+                        privacyOverlayController?.show(
+                            mode: .secure(
+                                streamingActive: appState.remoteWorkSession.state.isStreamingActive,
+                                streamedDisplayID: CGMainDisplayID()
+                            )
+                        )
                     }
                 }
         }
@@ -172,6 +183,38 @@ struct MacStreamHostApp: App {
         ) {
             MenuBarContent(appState: appState)
         }
+    }
+
+    /// Builds the closure bundle the `PrivacyOverlayController` needs
+    /// for the secure overlay's password panel. Captures `appState`
+    /// weakly so the controller can outlive transient view rebuilds
+    /// without leaking, but `appState` is owned by the App scene so in
+    /// practice the closures always have a live target.
+    private func makeSecureContext() -> PrivacyOverlayController.SecureContext {
+        PrivacyOverlayController.SecureContext(
+            allowMacOSAuthentication: { [weak appState] in
+                appState?.runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication ?? false
+            },
+            allowAppPassword: { [weak appState] in
+                appState?.runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword ?? false
+            },
+            macOSAuthAvailable: { [weak appState] in
+                appState?.localAuthenticationService.isAvailable() ?? false
+            },
+            isAppPasswordSet: { [weak appState] in
+                appState?.isAppPasswordSet ?? false
+            },
+            lockoutUntil: { [weak appState] in
+                appState?.secureLockoutUntil
+            },
+            onBiometric: { [weak appState] in
+                guard let appState else { return }
+                Task { _ = await appState.dismissSecureOverlay() }
+            },
+            onAppPassword: { [weak appState] candidate in
+                appState?.dismissSecureOverlay(withAppPassword: candidate) ?? false
+            }
+        )
     }
 
     private var menuBarBinding: Binding<Bool> {

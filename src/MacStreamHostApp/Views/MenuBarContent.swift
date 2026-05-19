@@ -52,14 +52,20 @@ struct MenuBarContent: View {
 
         Divider()
 
-        // Host privacy — lock + unlock pair. Unlock is only shown when
-        // the overlay is actually active so the menu stays compact.
-        if appState.privacyOverlayActive {
+        // Host privacy — lock + unlock pair. The unlock action varies
+        // by mode: classic supports a tray bypass (no password needed
+        // when policy doesn't require one), secure intentionally does
+        // NOT — desbloqueio só pelo painel local, anti-bypass.
+        switch appState.privacyOverlayMode {
+        case .classic:
             Button("Desbloquear tela do host") {
                 _ = appState.dismissPrivacyOverlay(passwordCandidate: nil)
             }
             .disabled(appState.overlayUnlockRequiresPassword)
-        } else {
+        case .secure:
+            Text("Host bloqueado (modo seguro) — desbloqueie pelo painel.")
+                .foregroundStyle(.orange)
+        case .none:
             Button("Bloquear tela do host") {
                 Task { await appState.lockHostForPrivacy() }
             }

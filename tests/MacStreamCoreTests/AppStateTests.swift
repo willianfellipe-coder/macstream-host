@@ -319,4 +319,163 @@ final class AppStateTests: XCTestCase {
                        "Saída do sistema restaurada para Alto-falantes do Mac.")
         XCTAssertEqual(mockAudio.currentOutputID, speakers.id)
     }
+
+    // MARK: - Secure overlay
+
+    @MainActor
+    func testLockHostInSecureModeWithoutAnyAuthSetsErrorMessageAndNoOp() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(),
+            localAuthenticationService: MockLocalAuthenticationService(available: false)
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+        XCTAssertTrue(appState.lastOperationMessage?.contains("Configure uma senha") ?? false)
+    }
+
+    @MainActor
+    func testLockHostInSecureModeWithAppPasswordEntersSecureMode() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "topsecret"),
+            localAuthenticationService: MockLocalAuthenticationService(available: false)
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+        XCTAssertTrue(appState.privacyOverlayActive)
+    }
+
+    @MainActor
+    func testLockHostInSecureModeWithBiometricsAvailableEntersSecureMode() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(),
+            localAuthenticationService: MockLocalAuthenticationService(available: true)
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+    }
+
+    @MainActor
+    func testDismissSecureOverlayWithCorrectAppPasswordSucceeds() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "topsecret")
+        )
+
+        await appState.lockHostForPrivacy()
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+
+        let ok = appState.dismissSecureOverlay(withAppPassword: "topsecret")
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+    }
+
+    @MainActor
+    func testDismissSecureOverlayWithWrongAppPasswordIncrementsAttemptCounter() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "topsecret")
+        )
+        await appState.lockHostForPrivacy()
+
+        XCTAssertFalse(appState.dismissSecureOverlay(withAppPassword: "wrong"))
+        XCTAssertFalse(appState.dismissSecureOverlay(withAppPassword: "wrong"))
+
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+        XCTAssertNil(appState.secureLockoutUntil) // below max
+    }
+
+    @MainActor
+    func testDismissSecureOverlayWithBiometricsRunsLocalAuthAndUnlocks() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let la = MockLocalAuthenticationService(available: true, nextResult: .success(true))
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            localAuthenticationService: la
+        )
+        await appState.lockHostForPrivacy()
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+
+        let ok = await appState.dismissSecureOverlay()
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+        XCTAssertEqual(la.authenticateCallCount, 1)
+    }
+
+    @MainActor
+    func testLockoutAfterMaxAttemptsBlocksFurtherAppPasswordAttempts() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(
+            mode: .secureOverlay,
+            secureMaxUnlockAttempts: 2
+        )
+        var nowSeed = Date(timeIntervalSince1970: 1_000_000)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "topsecret"),
+            dateProvider: { nowSeed }
+        )
+        await appState.lockHostForPrivacy()
+
+        // Two failed attempts hit the max.
+        _ = appState.dismissSecureOverlay(withAppPassword: "wrong")
+        _ = appState.dismissSecureOverlay(withAppPassword: "wrong")
+
+        XCTAssertNotNil(appState.secureLockoutUntil)
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+
+        // While in lockout window, even the correct password is refused.
+        let blocked = appState.dismissSecureOverlay(withAppPassword: "topsecret")
+        XCTAssertFalse(blocked)
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+
+        // Advance past the lockout window; correct password works again.
+        if let until = appState.secureLockoutUntil {
+            nowSeed = until.addingTimeInterval(1)
+        }
+        let ok = appState.dismissSecureOverlay(withAppPassword: "topsecret")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+    }
+
+    @MainActor
+    func testClassicDismissDoesNotUnlockSecureMode() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "topsecret")
+        )
+        await appState.lockHostForPrivacy()
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+
+        // The classic tray bypass MUST be refused — secure mode requires
+        // the dedicated panel path. Otherwise the tray would silently
+        // unlock without a password.
+        let ok = appState.dismissPrivacyOverlay(passwordCandidate: nil)
+
+        XCTAssertFalse(ok)
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+    }
 }
