@@ -22,6 +22,21 @@ final class SunshineManagerTests: XCTestCase {
         XCTAssertNil(status.version)
     }
 
+    func testStatusReportsDegradedWhenProcessRunsButWebUIIsNotReachable() async {
+        let manager = DefaultSunshineManager(
+            binaryResolver: FakeSunshineBinaryResolver(binaryURL: URL(fileURLWithPath: "/tmp/sunshine")),
+            processInspector: FakeSunshineProcessInspector(isRunning: true),
+            webUIProbe: FakeSunshineWebUIProbe(isReachable: false),
+            configurationManager: try! Self.makeConfigurationManagerWithConfig(),
+            ownershipStore: FakeSunshineOwnershipStore()
+        )
+
+        let status = await manager.status()
+
+        XCTAssertEqual(status.state, SunshineServiceState.degraded)
+        XCTAssertFalse(status.webUIReachable)
+    }
+
     func testStatusReportsStoppedWhenBinaryExistsButProcessIsNotRunning() async {
         let probe = FakeSunshineWebUIProbe(isReachable: true)
         let manager = DefaultSunshineManager(
@@ -69,9 +84,7 @@ final class SunshineManagerTests: XCTestCase {
         XCTAssertEqual(resolver.resolveBinary()?.path, sunshineURL.path)
     }
 
-    func testResolverPrefersFlatHelperEngineOverEverything() throws {
-        // Simulate the new packaged layout: Contents/Resources is the bundle
-        // resource URL, and the engine binary lives at ../MacOS/MacStreamEngine.
+    func testResolverPrefersEmbeddedSunshineAppOverFlatHelper() throws {
         let appBundle = try makeTemporaryDirectory()
         let contents = appBundle.appendingPathComponent("Contents")
         let resources = contents.appendingPathComponent("Resources")
@@ -81,10 +94,28 @@ final class SunshineManagerTests: XCTestCase {
         let helperEngine = macOS.appendingPathComponent("MacStreamEngine")
         try writeExecutableStub(at: helperEngine)
 
-        // Also place a legacy embedded Sunshine.app to prove the flat helper wins.
-        let legacy = resources.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
-        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try writeExecutableStub(at: legacy)
+        let bundledSunshine = resources.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
+        try FileManager.default.createDirectory(at: bundledSunshine.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try writeExecutableStub(at: bundledSunshine)
+
+        let resolver = DefaultSunshineBinaryResolver(
+            candidatePaths: [],
+            environment: [:],
+            bundleResourceURL: resources
+        )
+
+        XCTAssertEqual(resolver.resolveBinary()?.path, bundledSunshine.path)
+    }
+
+    func testResolverFallsBackToFlatHelperWhenEmbeddedAppMissing() throws {
+        let appBundle = try makeTemporaryDirectory()
+        let contents = appBundle.appendingPathComponent("Contents")
+        let resources = contents.appendingPathComponent("Resources")
+        let macOS = contents.appendingPathComponent("MacOS")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        let helperEngine = macOS.appendingPathComponent("MacStreamEngine")
+        try writeExecutableStub(at: helperEngine)
 
         let resolver = DefaultSunshineBinaryResolver(
             candidatePaths: [],
@@ -95,9 +126,7 @@ final class SunshineManagerTests: XCTestCase {
         XCTAssertEqual(resolver.resolveBinary()?.path, helperEngine.path)
     }
 
-    func testResolverFallsBackToLegacyInnerBundleWhenFlatHelperMissing() throws {
-        // Simulate an in-place upgrade where the new flat helper isn't there yet
-        // but the old Sunshine.app still is — we should still find it.
+    func testResolverFindsEmbeddedSunshineAppBeforeCandidatesAndPath() throws {
         let bundleResourceURL = try makeTemporaryDirectory()
         let bundledSunshine = bundleResourceURL.appendingPathComponent("sunshine/Sunshine.app/Contents/MacOS/Sunshine")
         try FileManager.default.createDirectory(at: bundledSunshine.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -256,6 +285,33 @@ final class SunshineManagerTests: XCTestCase {
         XCTAssertEqual(launcher.launchCount, 1)
     }
 
+    func testStartReplacesOwnedProcessWhenResolvedBinaryChanged() async throws {
+        let newBinaryPath = "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine"
+        let store = FakeSunshineOwnershipStore(process: SunshineOwnedProcess(
+            processID: 789,
+            binaryPath: "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine",
+            configPath: "/tmp/sunshine.conf"
+        ))
+        let launcher = FakeSunshineProcessLauncher(processID: 456)
+        let signaler = FakeSunshineProcessSignaler(isRunning: true, matchesOwnership: true)
+        let manager = DefaultSunshineManager(
+            binaryResolver: FakeSunshineBinaryResolver(binaryURL: URL(fileURLWithPath: newBinaryPath)),
+            processInspector: FakeSunshineProcessInspector(isRunning: false),
+            configurationManager: try Self.makeConfigurationManagerWithConfig(),
+            ownershipStore: store,
+            processLauncher: launcher,
+            processSignaler: signaler,
+            logDirectoryURL: try makeTemporaryDirectory()
+        )
+
+        try await manager.start()
+
+        XCTAssertEqual(signaler.terminatedProcessIDs, [789])
+        XCTAssertEqual(launcher.launchCount, 1)
+        XCTAssertEqual(store.process?.processID, 456)
+        XCTAssertEqual(store.process?.binaryPath, newBinaryPath)
+    }
+
     func testStopRefusesOwnershipMismatch() async throws {
         let store = FakeSunshineOwnershipStore(process: SunshineOwnedProcess(
             processID: 789,
@@ -300,6 +356,64 @@ final class SunshineManagerTests: XCTestCase {
 
         XCTAssertNil(store.process)
         XCTAssertEqual(signaler.terminatedProcessIDs, [789])
+    }
+
+    func testRestartClearsOwnershipMismatchAndStartsFresh() async throws {
+        let store = FakeSunshineOwnershipStore(process: SunshineOwnedProcess(
+            processID: 789,
+            binaryPath: "/tmp/sunshine",
+            configPath: "/tmp/sunshine.conf"
+        ))
+        let launcher = FakeSunshineProcessLauncher(processID: 456)
+        let manager = DefaultSunshineManager(
+            binaryResolver: FakeSunshineBinaryResolver(binaryURL: URL(fileURLWithPath: "/tmp/sunshine")),
+            processInspector: FakeSunshineProcessInspector(isRunning: false),
+            configurationManager: try Self.makeConfigurationManagerWithConfig(),
+            ownershipStore: store,
+            processLauncher: launcher,
+            processSignaler: FakeSunshineProcessSignaler(isRunning: true, matchesOwnership: false),
+            logDirectoryURL: try makeTemporaryDirectory()
+        )
+
+        try await manager.restart()
+
+        XCTAssertEqual(launcher.launchCount, 1)
+        XCTAssertEqual(store.process?.processID, 456)
+    }
+
+    func testProcessSignalerRejectsLegacyEngineWhenEmbeddedSunshineIsExpected() async {
+        let configPath = "/Users/test/Library/Application Support/MacStreamHost/sunshine/sunshine.conf"
+        let signaler = SystemSunshineProcessSignaler(runner: FakeCommandRunner(
+            exitCode: 0,
+            standardOutput: "/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine \(configPath)"
+        ))
+        let process = SunshineOwnedProcess(
+            processID: 789,
+            binaryPath: "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine",
+            configPath: configPath
+        )
+
+        let matches = await signaler.matchesOwnership(process)
+
+        XCTAssertFalse(matches)
+    }
+
+    func testProcessSignalerMatchesExactEmbeddedSunshinePathWithSpaces() async {
+        let binaryPath = "/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app/Contents/MacOS/Sunshine"
+        let configPath = "/Users/test/Library/Application Support/MacStreamHost/sunshine/sunshine.conf"
+        let signaler = SystemSunshineProcessSignaler(runner: FakeCommandRunner(
+            exitCode: 0,
+            standardOutput: "\(binaryPath) \(configPath)"
+        ))
+        let process = SunshineOwnedProcess(
+            processID: 789,
+            binaryPath: binaryPath,
+            configPath: configPath
+        )
+
+        let matches = await signaler.matchesOwnership(process)
+
+        XCTAssertTrue(matches)
     }
 
     private static func makeConfigurationManagerWithConfig() throws -> DefaultConfigurationManager {
@@ -364,9 +478,11 @@ private final class FakeSunshineWebUIProbe: SunshineWebUIProbing {
 
 private struct FakeCommandRunner: CommandRunning {
     let exitCode: Int32
+    var standardOutput: String = ""
+    var standardError: String = ""
 
     func run(executablePath: String, arguments: [String], timeout: TimeInterval) async -> CommandResult {
-        CommandResult(exitCode: exitCode)
+        CommandResult(exitCode: exitCode, standardOutput: standardOutput, standardError: standardError)
     }
 }
 

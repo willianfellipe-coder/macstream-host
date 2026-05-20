@@ -82,12 +82,10 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             checks.append(runtimeLogCheck)
         }
 
-        // Accessibility check: if our process isn't AX-trusted, keyboard
-        // and mouse forwarding from Moonlight are silently dropped by
-        // `CGEventPost`. We probe via `AXIsProcessTrusted()` from the GUI
-        // process. Because the GUI and engine share Identifier and
-        // Authority (org.macstream.host / MacStream Local Dev), the
-        // result is representative of what the engine sees.
+        // Accessibility check: if the process posting CGEvents is not
+        // AX-trusted, keyboard and mouse forwarding from Moonlight are
+        // silently dropped. This probe covers MacStream Host itself; the
+        // nested Sunshine app may still need its own grant after first launch.
         checks.append(accessibilityCheck())
 
         checks.append(contentsOf: [
@@ -172,6 +170,11 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
                 return "Motor de vídeo do MacStream rodando. Binário interno em \(binaryPath)."
             }
             return "Motor de vídeo rodando, mas o binário ainda não foi localizado."
+        case .degraded:
+            if status.webUIReachable == false, let binaryPath = status.binaryPath {
+                return "Motor de vídeo iniciou em \(binaryPath), mas a interface local ainda não abriu; verificar logs antes de diagnosticar rede."
+            }
+            return "Motor de vídeo ativo com degradação; verificar logs do Sunshine."
         case .stopped:
             if let binaryPath = status.binaryPath {
                 return "Motor de vídeo detectado em \(binaryPath), mas não está rodando."
@@ -181,7 +184,7 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             return "Reinstale o MacStream Host — o motor de vídeo embarcado não foi encontrado no bundle."
         case .failed:
             return "Consulte os logs do motor de vídeo para identificar a causa."
-        default:
+        case .starting, .unknown:
             return "Motor de vídeo ainda não foi iniciado pelo MacStream."
         }
     }

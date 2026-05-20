@@ -18,7 +18,8 @@ set -uo pipefail
 
 APP_BUNDLE="/Applications/MacStream Host.app"
 AGENT_BINARY="$APP_BUNDLE/Contents/MacOS/macstream-agent"
-ENGINE_BINARY="$APP_BUNDLE/Contents/MacOS/MacStreamEngine"
+ENGINE_APP="$APP_BUNDLE/Contents/Resources/sunshine/Sunshine.app"
+ENGINE_BINARY="$ENGINE_APP/Contents/MacOS/Sunshine"
 GUI_BINARY="$APP_BUNDLE/Contents/MacOS/MacStream Host"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/com.macstream.host.agent.plist"
 AGENT_STATUS_FILE="$HOME/Library/Application Support/MacStreamHost/Agent/status.json"
@@ -73,7 +74,19 @@ if [[ -d "$APP_BUNDLE" ]]; then
     fail "codesign --verify FAILED on the bundle"
   fi
 
-  # Same identity for app + engine helper
+  if [[ -e "$APP_BUNDLE/Contents/MacOS/MacStreamEngine" ]]; then
+    fail "Legacy flat engine exists at Contents/MacOS/MacStreamEngine — packaging regression"
+  else
+    pass "No legacy flat MacStreamEngine in Contents/MacOS"
+  fi
+
+  if [[ -d "$ENGINE_APP" ]]; then
+    pass "Nested Sunshine.app exists"
+  else
+    fail "Missing nested Sunshine.app at $ENGINE_APP"
+  fi
+
+  # Codesign / identity sanity
   app_auth=$(codesign -dvv "$GUI_BINARY" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')
   eng_auth=$(codesign -dvv "$ENGINE_BINARY" 2>&1 | awk -F= '/^Authority=/{print $2; exit}')
   if [[ -z "$app_auth" && -z "$eng_auth" ]]; then
@@ -87,12 +100,12 @@ if [[ -d "$APP_BUNDLE" ]]; then
     fail "App authority '$app_auth' ≠ engine authority '$eng_auth' — TCC will treat them as separate apps"
   fi
 
-  # Engine identifier must be org.macstream.host (otherwise TCC sees it as separate)
+  # Engine identifier is intentionally separate: it is a nested app TCC subject.
   eng_id=$(codesign -dvv "$ENGINE_BINARY" 2>&1 | awk -F= '/^Identifier=/{print $2; exit}')
-  if [[ "$eng_id" == "org.macstream.host" ]]; then
-    pass "Engine identifier is org.macstream.host"
+  if [[ "$eng_id" == "org.macstream.host.engine.sunshine" ]]; then
+    pass "Engine identifier is org.macstream.host.engine.sunshine"
   else
-    fail "Engine identifier is '$eng_id' (expected org.macstream.host)"
+    fail "Engine identifier is '$eng_id' (expected org.macstream.host.engine.sunshine)"
   fi
 else
   fail "Bundle missing at $APP_BUNDLE"
@@ -124,7 +137,7 @@ fi
 
 # ----------------------------------------------------------------------
 section "3. Engine process + RTSP port"
-engine_pids=$(pgrep -f "MacStream Host\.app/Contents/MacOS/MacStreamEngine" 2>/dev/null || true)
+engine_pids=$(pgrep -f "MacStream Host\.app/Contents/Resources/sunshine/Sunshine\.app/Contents/MacOS/Sunshine" 2>/dev/null || true)
 engine_count=$(printf '%s\n' $engine_pids | grep -c . || true)
 
 # If no engine is running and we have an agent, ask the agent to spawn one
@@ -138,22 +151,22 @@ if [[ "$engine_count" -eq 0 && "$agent_count" -ge 1 ]]; then
 JSON
   for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
-    engine_pids=$(pgrep -f "MacStream Host\.app/Contents/MacOS/MacStreamEngine" 2>/dev/null || true)
+    engine_pids=$(pgrep -f "MacStream Host\.app/Contents/Resources/sunshine/Sunshine\.app/Contents/MacOS/Sunshine" 2>/dev/null || true)
     engine_count=$(printf '%s\n' $engine_pids | grep -c . || true)
     [[ "$engine_count" -ge 1 ]] && break
   done
 fi
 
 if [[ "$engine_count" -eq 1 ]]; then
-  pass "Exactly one MacStreamEngine running (pid $engine_pids)"
+  pass "Exactly one Sunshine engine running (pid $engine_pids)"
 elif [[ "$engine_count" -eq 0 ]]; then
-  fail "No MacStreamEngine process (couldn't be spawned)"
+  fail "No Sunshine engine process (couldn't be spawned)"
 else
-  fail "$engine_count MacStreamEngine processes (expected 1) — race in DefaultSunshineManager.start"
+  fail "$engine_count Sunshine engine processes (expected 1) — race in DefaultSunshineManager.start"
 fi
 
 # RTSP port 48010 must be bound by OUR engine (not stale)
-port_owner_pid=$(lsof -nP -i:48010 2>/dev/null | awk 'NR>1 && $1 ~ /^MacStream/{print $2; exit}')
+port_owner_pid=$(lsof -nP -i:48010 2>/dev/null | awk 'NR>1 && $1 ~ /^(Sunshine|MacStream)/{print $2; exit}')
 if [[ -n "$port_owner_pid" ]]; then
   if [[ -n "$engine_pids" ]] && printf '%s\n' $engine_pids | grep -q "^${port_owner_pid}\$"; then
     pass "Port 48010 (RTSP) bound by current engine"
@@ -290,11 +303,11 @@ fi
 # ----------------------------------------------------------------------
 section "8. Accessibility (input forwarding)"
 # Sunshine injects keyboard/mouse via CGEventPost — that requires Accessibility
-# TCC for the engine's responsible identity. macstreamctl ships with the
-# `axprobe` subcommand which calls AXIsProcessTrusted() and prints
-# AX_TRUSTED=true|false. Because macstreamctl is signed with the same
-# identifier (`org.macstream.host`) as the engine, the result is
-# representative of what the engine sees.
+# TCC for the process posting events. macstreamctl ships with the
+# `axprobe` subcommand which calls AXIsProcessTrusted() for the
+# MacStream Host identity and prints AX_TRUSTED=true|false. If video
+# starts but input fails, also grant Accessibility to the nested
+# MacStream Video Engine.
 MACSTREAMCTL="$APP_BUNDLE/Contents/MacOS/macstreamctl"
 if [[ -x "$MACSTREAMCTL" ]]; then
   ax_probe_output=$("$MACSTREAMCTL" axprobe 2>&1 || true)

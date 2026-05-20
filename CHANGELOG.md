@@ -4,6 +4,62 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Restore Sunshine.app packaging and prevent flat-helper regressions (2026-05-19)
+
+User report: after recent changes, Moonlight could not connect to
+MacStream Host. The previous investigation incorrectly treated it as a
+network issue. It was local engine startup.
+
+**Root cause:** Sunshine had been flattened into
+`Contents/MacOS/MacStreamEngine` and launched through
+`responsibility_spawnattrs_setdisclaim`. On macOS 26 that process could
+hang in the AVFoundation/VideoToolbox dummy-frame encoder probe before
+opening HTTP, HTTPS/nvhttp, Web UI, or RTSP sockets. The process looked
+alive, but `lsof` showed no listening Sunshine ports, so Moonlight had
+nothing to connect to.
+
+**Fix:**
+- Package Sunshine as a real nested app at
+  `Contents/Resources/sunshine/Sunshine.app`.
+- Prefer the nested `Sunshine.app/Contents/MacOS/Sunshine` binary in
+  `DefaultSunshineBinaryResolver`; keep `MacStreamEngine` only as a
+  legacy fallback.
+- Remove `ResponsibilityDisclaim.swift` and launch Sunshine with normal
+  `Process()` semantics.
+- Make ownership validation compare the resolved binary path, not just
+  the config path.
+- Make `start()` replace stale owned processes from the broken
+  flat-helper layout.
+- Make `restart()` clear stale ownership mismatch and start fresh.
+- Report a running process with unreachable Web UI as `degraded`
+  instead of healthy.
+- Delete the obsolete LIEF `embed_lsuielement.py` helper so future
+  packaging work cannot accidentally recreate the flat Mach-O helper
+  path.
+
+**Runtime validation performed:**
+- Installed clean app in `/Applications`.
+- Confirmed `macstreamctl paths` resolves to the nested
+  `Sunshine.app`.
+- Confirmed `/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine`
+  is absent.
+- Confirmed `codesign --verify --deep --strict` passes.
+- Confirmed Sunshine runs as `Sunshine`, ownership points to the nested
+  app, Web UI is reachable, and TCP `47984`, `47989`, `47990`, `48010`
+  listen locally.
+- Confirmed Moonlight discovers the host, pairs, and connects after the
+  nested engine Screen Recording grant is applied and the engine is
+  restarted.
+
+**Docs:** Added `docs/SUNSHINE_ENGINE_RUNBOOK.md` with root cause,
+non-negotiable regression guards, packaging checks, TCC requirements,
+Moonlight error triage, and validation commands.
+
+**Tests:** `SunshineManagerTests` now covers resolver priority, stale
+owned process replacement, restart mismatch recovery, legacy engine
+rejection when embedded Sunshine is expected, and degraded Web UI
+status.
+
 ### Secure lock mode: black overlay with mandatory password unlock (2026-05-18)
 
 User report: the existing "Bloquear host" only dimmed displays — anyone

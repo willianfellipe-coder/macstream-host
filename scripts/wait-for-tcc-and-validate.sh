@@ -17,7 +17,6 @@ set -uo pipefail
 
 TIMEOUT="${1:-600}"
 SUNSHINE_LOG="$HOME/.config/sunshine/sunshine.log"
-COMMAND_FILE="$HOME/Library/Application Support/MacStreamHost/Agent/command.json"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 c_green='\033[1;32m'
@@ -31,17 +30,9 @@ attempt=0
 
 trigger_respawn() {
   attempt=$((attempt+1))
-  # Kill any zombie engine + clear ownership so the next start is fresh
-  pgrep -f "MacStream Host\.app/Contents/MacOS/MacStreamEngine" 2>/dev/null \
-    | xargs -r kill -9 2>/dev/null || true
-  rm -f "$HOME/Library/Application Support/MacStreamHost/run/sunshine-owned-process.json"
+  # Restart the owned nested Sunshine.app so it re-evaluates TCC.
+  /Applications/MacStream\ Host.app/Contents/MacOS/macstreamctl restart >/dev/null 2>&1 || true
   : > "$SUNSHINE_LOG"
-
-  local uuid; uuid=$(uuidgen)
-  local now; now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  cat > "$COMMAND_FILE" <<JSON
-{"createdAt":"$now","id":"$uuid","kind":"startRemoteWork"}
-JSON
 }
 
 check_tcc_ok() {
@@ -60,7 +51,7 @@ check_tcc_ok() {
   return 2 # unknown — log didn't reach either marker
 }
 
-printf "${c_dim}Waiting for Screen Recording grant for MacStream Host + MacStreamEngine.${c_reset}\n"
+printf "${c_dim}Waiting for Screen Recording grant for MacStream Host + MacStream Video Engine.${c_reset}\n"
 printf "${c_dim}System Settings > Privacy & Security > Screen Recording has been opened.${c_reset}\n"
 printf "${c_dim}Will poll every 10s for up to %ss. Ctrl+C to abort.${c_reset}\n\n" "$TIMEOUT"
 

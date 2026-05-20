@@ -146,13 +146,11 @@ public final class DefaultPermissionManager: PermissionManaging {
         case .accessibility:
             switch status {
             case .granted:
-                // Caveat: AXIsProcessTrusted reports the PARENT process. The
-                // helper engine binary (`MacStreamEngine`) is a sibling Mach-O
-                // inside the bundle and macOS treats it as a separate
-                // accessibility subject. Mouse forwarding from Moonlight tends
-                // to work via the parent grant, but KEYBOARD events injected
-                // by the engine require the engine to be in the list too.
-                return "Acessibilidade concedida ao MacStream Host. Para teclado via Moonlight, adicione também '/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine' na lista de Acessibilidade."
+                // AXIsProcessTrusted reports the caller. The embedded Sunshine
+                // engine is intentionally a nested app bundle, so macOS may
+                // require its own Accessibility grant for keyboard/mouse
+                // injection from a Moonlight session.
+                return "Acessibilidade concedida ao MacStream Host. Se teclado ou mouse falharem no Moonlight, adicione também 'MacStream Video Engine' em Ajustes > Privacidade > Acessibilidade."
             default:
                 return "Acessibilidade obrigatória para o Moonlight controlar teclado e mouse do Mac. Abra Ajustes do Sistema e ative o MacStream Host."
             }

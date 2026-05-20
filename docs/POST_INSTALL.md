@@ -9,37 +9,31 @@ chain stay stable across rebuilds and the TCC grants below survive
 `./scripts/package_dmg.sh` cycles. You only redo these steps after a
 fresh keychain wipe or a cert rotation.
 
-## Build dependency — LIEF (optional but recommended)
+## Runtime bundle identities
 
-The build pipeline patches the engine's Mach-O header to embed
-`LSUIElement=true`, suppressing the "ghost" Dock icon for the
-background processes. Install once on the build machine:
-
-```bash
-python3 -m pip install --user lief
-```
-
-Without LIEF the build still succeeds — `package_dmg.sh` emits a
-warning and the engine appears in the Dock until you install LIEF
-and rebuild.
-
-## Why one TCC entry covers the whole bundle
-
-MacStream Host ships three Mach-O binaries inside the same `.app`:
+MacStream Host ships its own executables plus the embedded Sunshine
+engine inside the same top-level `.app`:
 
 | Binary | Path | Role |
 |---|---|---|
 | `MacStream Host` | `/Applications/MacStream Host.app/Contents/MacOS/MacStream Host` | The SwiftUI app the user opens. |
-| `MacStreamEngine` | `/Applications/MacStream Host.app/Contents/MacOS/MacStreamEngine` | The upstream Sunshine binary, renamed. Captures the screen, encodes, serves Moonlight. |
 | `macstream-agent` | `/Applications/MacStream Host.app/Contents/MacOS/macstream-agent` | Resident user-LaunchAgent that holds power assertions and runs the privacy lock. |
+| `MacStream Video Engine` / `Sunshine.app` | `/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app` | The upstream Sunshine engine. Captures the screen, encodes, serves Moonlight. |
 
-All three are codesigned with the same identifier (`org.macstream.host`)
-**and** with the same authority (`MacStream Local Dev`). The agent
-spawns the engine via `responsibility_spawnattrs_setdisclaim`, which
-attributes the engine's TCC checks back to the agent. Because the
-agent, engine and GUI share identity, granting `MacStream Host.app`
-once in System Settings is enough to cover the whole chain — no need
-to add each binary individually.
+The Sunshine engine must remain a real nested `.app` bundle. A previous
+flat helper layout at `Contents/MacOS/MacStreamEngine` caused Sunshine
+to hang during macOS AVFoundation/VideoToolbox encoder probing before
+opening Moonlight ports. See `docs/SUNSHINE_ENGINE_RUNBOOK.md` before
+changing the engine layout.
+
+The nested engine bundle identifier is:
+
+```text
+org.macstream.host.engine.sunshine
+```
+
+macOS TCC grants must cover both the user-facing app and the nested
+engine where the capture or input API is called.
 
 ## Step 1 — Reset stale grants (only after a rebuild)
 
@@ -51,6 +45,7 @@ tccutil reset ScreenCapture org.macstream.host
 tccutil reset ScreenCapture org.macstream.host.engine.sunshine 2>/dev/null
 tccutil reset ScreenCapture dev.lizardbyte.app.Sunshine 2>/dev/null
 tccutil reset Accessibility org.macstream.host
+tccutil reset Accessibility org.macstream.host.engine.sunshine 2>/dev/null
 ```
 
 The Dashboard exposes a button "Resetar permissão de Gravação de Tela"
@@ -62,12 +57,18 @@ that runs the first three commands.
    (in pt-BR: "Gravação do Áudio do Sistema e da Tela").
 2. Click the `+` button. Authenticate when prompted.
 3. Navigate to `/Applications` and add **`MacStream Host`**. Toggle ON.
-4. macOS will offer to "Quit & Reopen" — accept.
+4. Click `+` again, open **`/Applications/MacStream Host.app/Contents/Resources/sunshine/`**, and add **`Sunshine.app`** (`MacStream Video Engine`). Toggle ON.
+5. macOS may offer to "Quit & Reopen" — accept.
 
-The single entry covers `MacStreamEngine` as well (shared codesign
-identifier). If `~/.config/sunshine/sunshine.log` still shows
-`Error: No screen capture permission!`, restart the engine via the
-dashboard ("Reiniciar") — Sunshine caches the trust check at boot.
+If Moonlight pairs but shows `Failed to initialize video capture/encoding`,
+restart the engine via the dashboard or:
+
+```bash
+/Applications/MacStream\ Host.app/Contents/MacOS/macstreamctl restart
+```
+
+Sunshine can cache capture trust at boot, so grants made while the
+engine is already running may not apply until restart.
 
 ## Step 3 — Grant Accessibility
 
@@ -79,12 +80,13 @@ symptom is "vídeo + áudio funcionam, input não chega".
 1. **System Settings → Privacy & Security → Accessibility**.
 2. Click `+`, authenticate.
 3. Navigate to `/Applications` and add **`MacStream Host`**. Toggle ON.
+4. If keyboard or mouse still fail after video starts, add
+   **`/Applications/MacStream Host.app/Contents/Resources/sunshine/Sunshine.app`**
+   as well.
 
-The dashboard probes `AXIsProcessTrusted()` via the embedded
-`macstreamctl axprobe` and shows the `AccessibilityRecoveryBanner` if
-the grant is missing. When you flip the toggle ON the live monitor
-detects the transition and respawns the engine automatically so it
-re-evaluates trust without a manual restart.
+The dashboard probes `AXIsProcessTrusted()` and shows an Accessibility
+warning if the grant is missing. Restart the engine after changing this
+grant while Sunshine is already running.
 
 ## Step 4 — (Optional) Microphone
 
@@ -110,6 +112,7 @@ Expected:
 - `Found HEVC encoder: hevc_videotoolbox [videotoolbox]`
 - No `Error: No screen capture permission!`
 - No `Fatal: Unable to find display or encoder during startup`
+- `macstreamctl status --json` shows `webUIReachable: true`
 
 ## Step 6 — Pair Moonlight
 
@@ -191,7 +194,9 @@ preto enquanto o cliente Moonlight continua vendo o desktop normalmente.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Moonlight shows "Failed to start streaming" | Screen Recording denied | Re-do Step 2, then restart the engine |
+| Moonlight shows the host with a lock | Host discovered but not paired | Pair through `https://localhost:47990` using the PIN shown by Moonlight |
+| Moonlight pairs, then shows "Failed to initialize video capture/encoding. Is a display connected and turned on?" | Screen Recording missing for the nested engine, grant made after engine boot, display asleep, or no active capture display | Re-do Step 2 for both entries, restart the engine, and enable "Manter display acordado" for remote/headless use |
+| Moonlight shows "Failed to start streaming" | Screen Recording denied or encoder startup failed | Re-do Step 2, restart the engine, then inspect `docs/SUNSHINE_ENGINE_RUNBOOK.md` |
 | Video and audio work, **neither keyboard nor mouse** reach the Mac | Accessibility denied for `org.macstream.host` | Re-do Step 3; the AccessibilityRecoveryBanner in the dashboard will surface this automatically |
 | `Error: No screen capture permission!` in sunshine.log after rebuild | TCC grant was reset (rare with stable identity) | `tccutil reset` (Step 1) + Step 2 + restart the engine |
 | Black strip across remote feed during host lock | Old build before the host-lock fix | Update to a build that contains `Suppress unlock panel during stream` |
