@@ -4,6 +4,15 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Fix stale Moonlight pairing reset (2026-05-19)
+
+- Fixed the Moonlight pairing reset path for current Sunshine state files:
+  the app now clears both legacy `root.named_certs` and current
+  `root.named_devices` entries while preserving the stable host `uniqueid`.
+- Added `macstreamctl pairings reset` so stale client certificates can be
+  cleared from the installed app without relying on the UI.
+- Added regression coverage for clearing both Sunshine pairing collections.
+
 ### Make secure host lock the default on develop (2026-05-19)
 
 - Created and published `develop` as the permanent development branch

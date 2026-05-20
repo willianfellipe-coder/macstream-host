@@ -39,6 +39,8 @@ struct MacStreamCTL {
             await writeSupportBundle(arguments: commandArguments)
         case "reset":
             await softReset(arguments: commandArguments)
+        case "pairings":
+            await pairings(arguments: commandArguments)
         case "webui":
             await openWebUI(arguments: commandArguments)
         case "axprobe":
@@ -525,6 +527,22 @@ struct MacStreamCTL {
         }
     }
 
+    private static func pairings(arguments: [String]) async {
+        let action = arguments.first ?? "help"
+        guard action == "reset" else {
+            print("Usage: macstreamctl pairings reset")
+            Foundation.exit(1)
+        }
+
+        do {
+            try DefaultSunshineIdentityStore().resetClientPairings()
+            print("Moonlight pairings reset. Restart Sunshine and pair again from Moonlight.")
+        } catch {
+            print("Failed to reset Moonlight pairings: \(error.localizedDescription)")
+            Foundation.exit(1)
+        }
+    }
+
     private static func openWebUI(arguments: [String]) async {
         let options = parseRuntimeOptions(arguments)
         let state = await makeAppState(options: options)
@@ -558,6 +576,7 @@ struct MacStreamCTL {
           support-bundle
                       Export sanitized diagnostics, logs, and config.
           reset       Soft reset only MacStream Host owned state; requires --confirm.
+          pairings    Reset Moonlight client pairings while preserving host identity.
 
         Shared options:
           --json                 Print JSON for doctor/status/logs/reset.
@@ -599,6 +618,9 @@ struct MacStreamCTL {
 
         Remote Work commands:
           remote-work status|prepare|start|stop|lock
+
+        Pairings commands:
+          pairings reset
         """)
     }
 

@@ -78,7 +78,7 @@ final class SunshineIdentityStoreTests: XCTestCase {
         XCTAssertEqual(certs?.first?["name"], "ipad")
     }
 
-    func testResetClientPairingsClearsNamedCertsAndKeepsUniqueID() throws {
+    func testResetClientPairingsClearsNamedCertsAndNamedDevicesAndKeepsUniqueID() throws {
         let root = try makeTemporaryDirectory()
         let identityURL = root.appendingPathComponent("identity.json")
         let stateURL = root.appendingPathComponent("sunshine_state.json")
@@ -86,7 +86,8 @@ final class SunshineIdentityStoreTests: XCTestCase {
         let existing: [String: Any] = [
             "root": [
                 "uniqueid": "stable",
-                "named_certs": [["name": "stale-ipad", "cert": "PEM"]]
+                "named_certs": [["name": "legacy-ipad", "cert": "PEM"]],
+                "named_devices": [["name": "stale-ipad", "cert": "PEM"]]
             ]
         ]
         try JSONSerialization.data(withJSONObject: existing).write(to: stateURL)
@@ -104,6 +105,8 @@ final class SunshineIdentityStoreTests: XCTestCase {
         XCTAssertEqual(inner?["uniqueid"] as? String, "stable")
         let certs = inner?["named_certs"] as? [[String: String]]
         XCTAssertEqual(certs?.count, 0)
+        let devices = inner?["named_devices"] as? [[String: String]]
+        XCTAssertEqual(devices?.count, 0)
     }
 
     func testResetClientPairingsIsNoOpWhenStateMissing() throws {

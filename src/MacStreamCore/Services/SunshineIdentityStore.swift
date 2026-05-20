@@ -58,10 +58,10 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
         return SunshineIdentity(uniqueID: identity, storedAt: macStreamIdentityURL)
     }
 
-    /// Drops the `named_certs` collection from Sunshine's state so the next
-    /// pairing starts clean while keeping the host's `uniqueid` intact. Used
-    /// by the "Resetar pareamentos" action when the iPad keeps offering a
-    /// stale entry.
+    /// Drops paired Moonlight client certificates from Sunshine's state so the
+    /// next pairing starts clean while keeping the host's `uniqueid` intact.
+    /// Newer Sunshine builds store these under `named_devices`; older builds
+    /// used `named_certs`, so clear both for a reliable reset.
     public func resetClientPairings() throws {
         guard fileManager.fileExists(atPath: sunshineStateURL.path) else { return }
         let data = try Data(contentsOf: sunshineStateURL)
@@ -70,6 +70,7 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
             return
         }
         innerRoot["named_certs"] = [] as [Any]
+        innerRoot["named_devices"] = [] as [Any]
         root["root"] = innerRoot
         let updated = try JSONSerialization.data(
             withJSONObject: root,
