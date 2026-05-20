@@ -18,6 +18,7 @@ import Foundation
 public protocol SunshineIdentityStoring {
     func ensureSunshineIdentity() throws -> SunshineIdentity
     func resetClientPairings() throws
+    func rotateHostIdentity() throws -> SunshineIdentity
 }
 
 public struct SunshineIdentity: Equatable {
@@ -79,6 +80,14 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
         try updated.write(to: sunshineStateURL, options: .atomic)
     }
 
+    @discardableResult
+    public func rotateHostIdentity() throws -> SunshineIdentity {
+        let fresh = uuidProvider()
+        try writeMacStreamIdentity(fresh)
+        try mirrorIntoSunshineState(uniqueID: fresh, clearPairings: true)
+        return SunshineIdentity(uniqueID: fresh, storedAt: macStreamIdentityURL)
+    }
+
     // MARK: Internal
 
     private func loadOrGenerateIdentity() throws -> String {
@@ -91,13 +100,21 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
             withIntermediateDirectories: true
         )
         let fresh = uuidProvider()
-        let payload: [String: Any] = ["sunshineUniqueID": fresh]
+        try writeMacStreamIdentity(fresh)
+        return fresh
+    }
+
+    private func writeMacStreamIdentity(_ uniqueID: String) throws {
+        try fileManager.createDirectory(
+            at: macStreamIdentityURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let payload: [String: Any] = ["sunshineUniqueID": uniqueID]
         let data = try JSONSerialization.data(
             withJSONObject: payload,
             options: [.prettyPrinted, .sortedKeys]
         )
         try data.write(to: macStreamIdentityURL, options: .atomic)
-        return fresh
     }
 
     private func loadStoredIdentity() throws -> String? {
@@ -110,6 +127,10 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
     }
 
     private func mirrorIntoSunshineStateIfNeeded(uniqueID: String) throws {
+        try mirrorIntoSunshineState(uniqueID: uniqueID, clearPairings: false)
+    }
+
+    private func mirrorIntoSunshineState(uniqueID: String, clearPairings: Bool) throws {
         try fileManager.createDirectory(
             at: sunshineStateURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -122,7 +143,9 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             root = parsed
             innerRoot = (parsed["root"] as? [String: Any]) ?? [:]
-            if let current = innerRoot["uniqueid"] as? String, current == uniqueID {
+            if clearPairings == false,
+               let current = innerRoot["uniqueid"] as? String,
+               current == uniqueID {
                 return
             }
         } else {
@@ -131,6 +154,10 @@ public final class DefaultSunshineIdentityStore: SunshineIdentityStoring {
         }
 
         innerRoot["uniqueid"] = uniqueID
+        if clearPairings {
+            innerRoot["named_certs"] = [] as [Any]
+            innerRoot["named_devices"] = [] as [Any]
+        }
         root["root"] = innerRoot
         let data = try JSONSerialization.data(
             withJSONObject: root,

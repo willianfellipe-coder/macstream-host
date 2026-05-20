@@ -118,6 +118,41 @@ final class SunshineIdentityStoreTests: XCTestCase {
         XCTAssertNoThrow(try store.resetClientPairings())
     }
 
+    func testRotateHostIdentityUpdatesStoredIdentityStateAndClearsPairings() throws {
+        let root = try makeTemporaryDirectory()
+        let identityURL = root.appendingPathComponent("identity.json")
+        let stateURL = root.appendingPathComponent("sunshine_state.json")
+
+        try JSONSerialization.data(withJSONObject: ["sunshineUniqueID": "old"]).write(to: identityURL)
+        let existing: [String: Any] = [
+            "root": [
+                "uniqueid": "old",
+                "named_certs": [["name": "legacy-ipad", "cert": "PEM"]],
+                "named_devices": [["name": "stale-ipad", "cert": "PEM"]]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing).write(to: stateURL)
+
+        let store = DefaultSunshineIdentityStore(
+            macStreamIdentityURL: identityURL,
+            sunshineStateURL: stateURL,
+            uuidProvider: { "new" }
+        )
+
+        let identity = try store.rotateHostIdentity()
+
+        XCTAssertEqual(identity.uniqueID, "new")
+
+        let stored = try JSONSerialization.jsonObject(with: Data(contentsOf: identityURL)) as? [String: Any]
+        XCTAssertEqual(stored?["sunshineUniqueID"] as? String, "new")
+
+        let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        let inner = parsed?["root"] as? [String: Any]
+        XCTAssertEqual(inner?["uniqueid"] as? String, "new")
+        XCTAssertEqual((inner?["named_certs"] as? [[String: String]])?.count, 0)
+        XCTAssertEqual((inner?["named_devices"] as? [[String: String]])?.count, 0)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacStreamHostSunshineIdentityTests-\(UUID().uuidString)", isDirectory: true)

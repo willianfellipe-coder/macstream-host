@@ -529,16 +529,22 @@ struct MacStreamCTL {
 
     private static func pairings(arguments: [String]) async {
         let action = arguments.first ?? "help"
-        guard action == "reset" else {
-            print("Usage: macstreamctl pairings reset")
+        guard action == "reset" || action == "rotate-identity" else {
+            print("Usage: macstreamctl pairings reset|rotate-identity")
             Foundation.exit(1)
         }
 
         do {
-            try DefaultSunshineIdentityStore().resetClientPairings()
-            print("Moonlight pairings reset. Restart Sunshine and pair again from Moonlight.")
+            let store = DefaultSunshineIdentityStore()
+            if action == "rotate-identity" {
+                let identity = try store.rotateHostIdentity()
+                print("Moonlight pairings reset and host identity rotated to \(identity.uniqueID). Restart Sunshine and pair again from Moonlight.")
+            } else {
+                try store.resetClientPairings()
+                print("Moonlight pairings reset. Restart Sunshine and pair again from Moonlight.")
+            }
         } catch {
-            print("Failed to reset Moonlight pairings: \(error.localizedDescription)")
+            print("Failed to update Moonlight pairings: \(error.localizedDescription)")
             Foundation.exit(1)
         }
     }
@@ -621,6 +627,7 @@ struct MacStreamCTL {
 
         Pairings commands:
           pairings reset
+          pairings rotate-identity
         """)
     }
 

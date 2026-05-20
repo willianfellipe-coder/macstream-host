@@ -11,6 +11,9 @@ All notable changes to MacStream Host will be documented here.
   `root.named_devices` entries while preserving the stable host `uniqueid`.
 - Added `macstreamctl pairings reset` so stale client certificates can be
   cleared from the installed app without relying on the UI.
+- Added `macstreamctl pairings rotate-identity` as a recovery path for
+  Moonlight clients that keep hiding or rejecting a host cached under the
+  previous `uniqueid`.
 - Added regression coverage for clearing both Sunshine pairing collections.
 
 ### Make secure host lock the default on develop (2026-05-19)
