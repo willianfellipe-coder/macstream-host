@@ -4,6 +4,13 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Fix secure lock password setup loop (2026-05-20)
+
+- Fixed the MacStream password Keychain write path used by the first
+  secure host lock. The store now updates an existing item before
+  creating a new one, avoiding duplicate-item failures that made the UI
+  keep asking to configure a password without actually enabling lock.
+
 ### Stop unauthorized Sunshine Web UI probes (2026-05-19)
 
 - Replaced MacStream's Web UI health probe with a local `lsof` port

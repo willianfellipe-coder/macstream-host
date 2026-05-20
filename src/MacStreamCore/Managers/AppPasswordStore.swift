@@ -47,9 +47,16 @@ public final class KeychainAppPasswordStore: AppPasswordStoring {
 
         guard let data = trimmed.data(using: .utf8) else { throw AppPasswordError.empty }
 
-        // Idempotent upsert: delete any existing item first so we don't fight
-        // duplicate-entry errors on macOS.
-        _ = SecItemDelete(baseQuery as CFDictionary)
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+        if updateStatus == errSecSuccess {
+            return
+        }
+        guard updateStatus == errSecItemNotFound else {
+            throw AppPasswordError.keychain(updateStatus)
+        }
 
         var attributes = baseQuery
         attributes[kSecValueData as String] = data
