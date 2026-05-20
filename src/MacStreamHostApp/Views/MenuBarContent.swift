@@ -63,7 +63,11 @@ struct MenuBarContent: View {
             }
             .disabled(appState.overlayUnlockRequiresPassword)
         case .secure:
-            Text("Host bloqueado (modo seguro) — desbloqueie pelo painel.")
+            Button("Desbloquear no Mac") {
+                Task { await appState.dismissSecureOverlay(withBiometrics: ()) }
+            }
+            .disabled(appState.runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication == false)
+            Text("Modo seguro usa Touch ID / senha do macOS local.")
                 .foregroundStyle(.orange)
         case .none:
             Button("Bloquear tela do host") {

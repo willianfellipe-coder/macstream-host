@@ -10,6 +10,9 @@ All notable changes to MacStream Host will be documented here.
   secure host lock. The store now updates an existing item before
   creating a new one, avoiding duplicate-item failures that made the UI
   keep asking to configure a password without actually enabling lock.
+- Added a local Touch ID / macOS password unlock action to the dashboard
+  and menu bar while secure lock is active, so the host cannot get stuck
+  when the per-display secure panel is not visible.
 
 ### Stop unauthorized Sunshine Web UI probes (2026-05-19)
 

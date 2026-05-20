@@ -188,11 +188,18 @@ struct DashboardView: View {
                         case .secure:
                             // Secure lock active. The canonical unlock
                             // surface is the per-display password panel —
-                            // showing a dashboard button here would let the
-                            // remote Moonlight viewer click it through the
-                            // streamed display (since the dashboard window
-                            // is behind brightness=0 but still SCK-visible).
-                            // Render a passive indicator instead.
+                            // the dashboard exposes only LocalAuthentication,
+                            // which must be completed on the host Mac.
+                            Button {
+                                Task { await appState.dismissSecureOverlay(withBiometrics: ()) }
+                            } label: {
+                                Label("Desbloquear no Mac", systemImage: "touchid")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                            .disabled(appState.runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication == false)
+                            .help("Abre Touch ID / senha do macOS no host. Não aceita senha digitada pelo Moonlight.")
+
                             Label("Host bloqueado (modo seguro)", systemImage: "lock.shield.fill")
                                 .foregroundStyle(.orange)
                                 .help("Desbloqueio acontece pelo painel na tela do Mac.")
