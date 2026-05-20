@@ -584,54 +584,21 @@ public final class PgrepSunshineProcessInspector: SunshineProcessInspecting {
     }
 }
 
-public final class LocalSunshineWebUIProbe: NSObject, SunshineWebUIProbing, URLSessionDelegate {
-    private let url: URL
-    private let timeout: TimeInterval
+public final class LocalSunshineWebUIProbe: SunshineWebUIProbing {
+    private let portChecker: NetworkPortChecking
+    private let port: SunshinePort
 
-    public init(url: URL = URL(string: "https://localhost:47990")!, timeout: TimeInterval = 2) {
-        self.url = url
-        self.timeout = timeout
+    public convenience init(url: URL = URL(string: "https://localhost:47990")!) {
+        self.init(url: url, portChecker: LsofNetworkPortChecker())
+    }
+
+    public init(url: URL, portChecker: NetworkPortChecking) {
+        self.portChecker = portChecker
+        self.port = SunshinePort(name: "Web UI", protocolKind: .tcp, port: url.port ?? 47990)
     }
 
     public func isReachable() async -> Bool {
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = timeout
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = timeout
-        configuration.timeoutIntervalForResource = timeout
-
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-
-        do {
-            let (_, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return false
-            }
-
-            return (200..<500).contains(httpResponse.statusCode)
-        } catch {
-            return false
-        }
-    }
-
-    public func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge
-    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              isLocalHost(challenge.protectionSpace.host),
-              let trust = challenge.protectionSpace.serverTrust else {
-            return (.performDefaultHandling, nil)
-        }
-
-        return (.useCredential, URLCredential(trust: trust))
-    }
-
-    private func isLocalHost(_ host: String) -> Bool {
-        host == "localhost" || host == "127.0.0.1" || host == "::1"
+        await portChecker.status(for: port) == .pass
     }
 }
 

@@ -4,6 +4,17 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Stop unauthorized Sunshine Web UI probes (2026-05-19)
+
+- Replaced MacStream's Web UI health probe with a local `lsof` port
+  inspection so status refreshes no longer connect to
+  `https://localhost:47990` without a Sunshine session.
+- Confirmed the installed app can report Web UI readiness without
+  generating repeated `Web UI: [127.0.0.1] -- not authorized` entries
+  in Sunshine logs.
+- Reinstalled the corrected build in `/Applications/MacStream Host.app`
+  and restarted the managed agent/Sunshine stack for Moonlight testing.
+
 ### Fix stale Moonlight pairing reset (2026-05-19)
 
 - Fixed the Moonlight pairing reset path for current Sunshine state files:
