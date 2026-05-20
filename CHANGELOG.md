@@ -13,6 +13,9 @@ All notable changes to MacStream Host will be documented here.
 - Added a local Touch ID / macOS password unlock action to the dashboard
   and menu bar while secure lock is active, so the host cannot get stuck
   when the per-display secure panel is not visible.
+- Changed secure lock to render a full-screen local shield on every
+  display instead of relying on brightness-only on the streamed display,
+  and forced the SwiftUI secure panel to fill the whole external monitor.
 
 ### Stop unauthorized Sunshine Web UI probes (2026-05-19)
 

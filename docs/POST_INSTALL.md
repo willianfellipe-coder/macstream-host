@@ -167,11 +167,11 @@ temporal (30s × tentativa extra, cap 5 min). Não é lockout permanente.
 ### O que acontece quando você clica "Bloquear host"
 
 - **Tela capturada pelo Moonlight** (normalmente o MacBook built-in):
-  brilho vai a 0 (apaga o backlight). **Nenhum NSWindow é criado** aqui
-  — é a única forma comprovada de ficar invisível ao ScreenCaptureKit.
+  recebe uma janela preta local, em tela cheia, sem painel de senha e
+  marcada como `sharingType = .none`. O brilho também pode ir a 0 como
+  reforço, mas brilho não é mais a barreira de segurança.
 - **Telas não capturadas** (ex.: LG external): NSWindow preto cobre o
-  display inteiro + `CGSetDisplayTransferByFormula` zera a gamma como
-  backup físico. O painel de senha aparece em uma dessas telas.
+  display inteiro. O painel de senha aparece em uma dessas telas.
 - **Cliente Moonlight**: continua vendo o desktop ao vivo, com mouse e
   teclado funcionando. Nunca vê o overlay.
 
@@ -205,6 +205,7 @@ de autenticação local do bloqueio seguro.
 | Host stays locked after disconnecting Moonlight | Old build before auto-release fix | Update to a build that contains `Extract SunshineSessionTracker` |
 | Moonlight has video but no audio | macOS Tap API permission not granted (System Audio Recording, macOS 14.4+) | First Moonlight session triggers the prompt; accept it. If you missed it, the dashboard's audio card surfaces the warning. |
 | Two cursors visible on iPad (iPad pointer **on top of** host cursor) | iPadOS renders its native trackpad/mouse pointer on top of every app — not a host bug. Sunshine has no knob to suppress the iPad's pointer. | Tap the screen once during the Moonlight session to enter "mouse capture mode": the iPad pointer hides and only the host cursor remains. Alternatively, in Moonlight iOS settings set **Touchscreen mode → Touchscreen as trackpad**. |
-| Host display goes black during stream and Moonlight cursor freezes | Old build that ran gamma blackout on the streamed display (corrupted ScreenCaptureKit) | Update to a build that contains "Lock during streaming: dim the built-in via brightness, only ban gamma" — gamma is now forbidden on the streamed display while brightness paths (panel-only, SCK-safe) still run. |
+| Host display can be revealed by raising brightness | Old build that treated brightness-only as the streamed-display lock | Update to a build that renders a full-screen local shield on every display. |
+| Host display goes black during stream and Moonlight cursor freezes | Old build that ran gamma blackout on the streamed display or captured remote input with the local shield | Update to a build where the streamed-display shield is visual-only and the password panel exists only on a non-streamed display. |
 | LG / external monitor stays bright when locking the host | Old build that only used `DisplayServicesSetBrightness` (no-op on externals) | Update to a build that contains "Multi-display lock via gamma blackout fallback" — externals dim via `CGSetDisplayTransferByFormula`. |
 | Dashboard button stays "Bloquear host" even when lock is active | Old build before the dashboard toggle | Update to a build that contains "Dashboard 'Bloquear host' toggles to 'Desbloquear host' while locked". |

@@ -134,6 +134,7 @@ struct SecureLockOverlayContent: View {
             )
             .padding(40)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             if showPasswordField, lockoutSecondsRemaining == nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {

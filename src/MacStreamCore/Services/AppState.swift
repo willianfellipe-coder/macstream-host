@@ -18,9 +18,9 @@ public enum PrivacyOverlayMode: Equatable {
     /// `HostPrivacyMode.appOverlay`. Brightness/gamma only, no
     /// mandatory password.
     case classic
-    /// Asymmetric secure overlay — `HostPrivacyMode.secureOverlay`.
-    /// Full-screen black NSWindow on every non-streamed display with
-    /// mandatory password, brightness=0 on the streamed display.
+    /// Secure overlay — `HostPrivacyMode.secureOverlay`.
+    /// Full-screen local shield on every display with the mandatory
+    /// password panel only on a safe non-streamed display.
     case secure
 }
 

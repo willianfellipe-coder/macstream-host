@@ -11,9 +11,10 @@ final class PrivacyOverlayController {
         /// physical displays. Equivalent to the pre-secure behavior.
         case classic(suppressPanel: Bool)
         /// Asymmetric secure overlay: full-screen black NSWindow on every
-        /// non-streamed display (with the password panel on a safe one),
-        /// brightness-only on the streamed display so SCK never sees the
-        /// overlay. Mandatory password unlock.
+        /// display, with the password panel only on a safe non-streamed
+        /// display. The streamed display gets a visual-only local shield
+        /// (`sharingType = .none`) so brightness is no longer the security
+        /// boundary.
         case secure(streamingActive: Bool, streamedDisplayID: CGDirectDisplayID?)
     }
 
@@ -156,19 +157,19 @@ final class PrivacyOverlayController {
 
     // MARK: - Secure mode
 
-    /// Asymmetric secure overlay. Designed around a documented
-    /// ScreenCaptureKit limitation: `NSWindow.sharingType = .none` is
-    /// not a reliable exclusion mechanism on macOS Sequoia/26 — black
-    /// NSWindows on the streamed display still leak into the Moonlight
-    /// feed. The only proven invisible-to-SCK technique is dropping
-    /// brightness on the panel itself, which the GPU framebuffer (what
-    /// SCK samples) never sees.
+    /// Asymmetric secure overlay. The streamed display cannot host the
+    /// password panel because remote synthetic input would be able to
+    /// target it. It still gets a full-screen local black shield marked
+    /// as non-shareable, so raising panel brightness does not reveal the
+    /// desktop. If `sharingType = .none` leaks on a future macOS/SCK path,
+    /// the correct product behavior is to refuse that display topology
+    /// rather than fall back to brightness as a "lock".
     ///
     /// Per-display strategy:
     ///   - Streamed display (Sunshine's capture target), while streaming:
-    ///       brightness=0 only. NO NSWindow, no password UI. The local
-    ///       viewer sees a dark panel, the remote viewer keeps seeing
-    ///       the live desktop.
+    ///       a full-screen, non-key, mouse-transparent black shield with
+    ///       no password UI. The local viewer sees a locked screen; the
+    ///       remote viewer should keep seeing the live desktop.
     ///   - Every other display: a full-screen black NSWindow covering
     ///       the entire `screen.frame` (including the menu bar area),
     ///       with the password panel hosted on the "safe display"
@@ -193,13 +194,13 @@ final class PrivacyOverlayController {
 
         for screen in screens {
             let id = displayID(for: screen)
-            // Skip the streamed display while streaming — never render a
-            // window there because it would leak into SCK.
-            if streamingActive, let streamedDisplayID, id == streamedDisplayID {
-                continue
-            }
+            let isStreamedDisplay = streamingActive && streamedDisplayID != nil && id == streamedDisplayID
             let isSafePanel = (screen === safeScreen)
-            let window = makeSecureWindow(on: screen, withUnlockPanel: isSafePanel)
+            let window = makeSecureWindow(
+                on: screen,
+                withUnlockPanel: isSafePanel,
+                visualOnly: isStreamedDisplay
+            )
             secureWindows.append(window)
             window.orderFrontRegardless()
             if isSafePanel {
@@ -210,11 +211,10 @@ final class PrivacyOverlayController {
             }
         }
 
-        // Belt-and-suspenders dim: even though the windows cover every
-        // non-streamed display, applying brightness=0 to the streamed
-        // display (panel-only, invisible to SCK) physically darkens the
-        // local view of the captured desktop. Without this the user sees
-        // the live desktop on their built-in panel while typing on the LG.
+        // Belt-and-suspenders dim: the lock is the full-screen shield,
+        // not brightness. Dimming still makes built-in panels less
+        // distracting and covers the short interval before the window is
+        // composited.
         let result = brightness.dimAllDisplays(
             except: nil,
             streamedDisplayID: streamingActive ? streamedDisplayID : nil,
@@ -240,7 +240,11 @@ final class PrivacyOverlayController {
     /// Builds a single per-display secure window. When `withUnlockPanel`
     /// is true the SwiftUI password panel is hosted as the contentView;
     /// otherwise the window stays pure black with no controls.
-    private func makeSecureWindow(on screen: NSScreen, withUnlockPanel: Bool) -> SecureLockWindow {
+    private func makeSecureWindow(
+        on screen: NSScreen,
+        withUnlockPanel: Bool,
+        visualOnly: Bool
+    ) -> SecureLockWindow {
         let window = SecureLockWindow(
             contentRect: screen.frame,
             styleMask: .borderless,
@@ -248,12 +252,13 @@ final class PrivacyOverlayController {
             defer: false,
             screen: screen
         )
-        window.level = .screenSaver
+        window.setFrame(screen.frame, display: true)
+        window.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
         window.backgroundColor = .black
         window.isOpaque = true
         window.hasShadow = false
         window.sharingType = .none
-        window.ignoresMouseEvents = false
+        window.ignoresMouseEvents = visualOnly
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         if withUnlockPanel, let context = secureContext {
@@ -269,9 +274,11 @@ final class PrivacyOverlayController {
                 )
             )
             hosting.view.frame = NSRect(origin: .zero, size: screen.frame.size)
+            hosting.view.autoresizingMask = [.width, .height]
             window.contentView = hosting.view
         } else {
             let blackView = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            blackView.autoresizingMask = [.width, .height]
             blackView.wantsLayer = true
             blackView.layer?.backgroundColor = NSColor.black.cgColor
             window.contentView = blackView

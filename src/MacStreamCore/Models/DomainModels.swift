@@ -241,11 +241,9 @@ public enum HostPrivacyMode: String, Codable, Equatable, CaseIterable {
     /// Invoke `CGSession -suspend`. May suspend the user's graphical session,
     /// which is unvalidated against Sunshine streaming and therefore experimental.
     case systemSuspend
-    /// Asymmetric secure overlay: a true black NSWindow with mandatory
-    /// password (app pwd or Touch ID/macOS pwd) on every non-streamed
-    /// display, and brightness=0 on the streamed display so SCK never
-    /// sees the overlay. Opt-in — requires at least one auth method
-    /// configured (app password set OR LocalAuthentication available).
+    /// Secure overlay: a true black local shield on every display with
+    /// mandatory password (app pwd or Touch ID/macOS pwd). The password
+    /// panel is hosted only on a safe non-streamed display.
     case secureOverlay
 
     public var displayName: String {
