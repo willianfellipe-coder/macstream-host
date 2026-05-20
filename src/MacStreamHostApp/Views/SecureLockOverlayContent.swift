@@ -4,8 +4,8 @@ import SwiftUI
 
 /// SwiftUI panel rendered on each non-streamed display when the host is
 /// in `.secureOverlay` mode. Offers Touch ID / macOS password (when the
-/// policy allows + LocalAuth is available) and the MacStream app
-/// password (when the policy allows + a password is set).
+/// policy allows + LocalAuth is available) and the mandatory MacStream
+/// fallback password when it is set.
 ///
 /// Decoupled from `AppState` so it can be hosted by the per-display
 /// NSWindow without dragging in EnvironmentObjects. All state crosses

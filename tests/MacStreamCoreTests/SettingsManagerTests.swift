@@ -46,10 +46,10 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(settings.sunshineBinaryPath, "/opt/homebrew/bin/sunshine")
         XCTAssertEqual(settings.configDirectoryPath, defaults.configDirectoryPath)
         XCTAssertEqual(settings.logDirectoryPath, defaults.logDirectoryPath)
-        XCTAssertEqual(settings.hostPrivacyPolicy.mode, .appOverlay)
+        XCTAssertEqual(settings.hostPrivacyPolicy.mode, .secureOverlay)
     }
 
-    func testLoadingSettingsWithoutPrivacyModeDefaultsToAppOverlay() throws {
+    func testLoadingSettingsWithoutPrivacyModePreservesLegacyAppOverlayDefault() throws {
         let directory = try makeTemporaryDirectory()
         let settingsURL = directory.appendingPathComponent("settings.json")
         let priorJSON = """

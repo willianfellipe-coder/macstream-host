@@ -101,6 +101,10 @@ struct ContentView: View {
 
 struct DashboardView: View {
     @EnvironmentObject private var appState: AppState
+    @State private var showSecurePasswordSetup = false
+    @State private var secureSetupPassword = ""
+    @State private var secureSetupConfirmPassword = ""
+    @State private var secureSetupError: String?
 
     private var pairingAddresses: [String] {
         var addresses = appState.dashboard.networkStatus.localAddresses
@@ -194,7 +198,7 @@ struct DashboardView: View {
                                 .help("Desbloqueio acontece pelo painel na tela do Mac.")
                         case .none:
                             Button {
-                                Task { await appState.lockHostForPrivacy() }
+                                requestHostLock()
                             } label: {
                                 Label("Bloquear host", systemImage: "lock.display")
                             }
@@ -288,6 +292,97 @@ struct DashboardView: View {
                 Spacer()
             }
         }
+        .sheet(isPresented: $showSecurePasswordSetup) {
+            securePasswordSetupSheet
+        }
+    }
+
+    private var securePasswordSetupSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Configurar senha de desbloqueio", systemImage: "key.fill")
+                .font(.title2.weight(.semibold))
+
+            Text("O bloqueio seguro exige uma senha do MacStream como fallback local. Touch ID / senha do macOS continua sendo o caminho preferencial quando disponível.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            SecureField("Senha do MacStream", text: $secureSetupPassword)
+                .textFieldStyle(.roundedBorder)
+            SecureField("Confirmar senha", text: $secureSetupConfirmPassword)
+                .textFieldStyle(.roundedBorder)
+
+            if let secureSetupError {
+                Label(secureSetupError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Button("Cancelar", role: .cancel) {
+                    resetSecurePasswordSetup()
+                }
+
+                Spacer()
+
+                Button {
+                    saveSecurePasswordAndLock()
+                } label: {
+                    Label("Salvar e bloquear", systemImage: "lock.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(secureSetupPassword.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+    }
+
+    private func requestHostLock() {
+        guard appState.runtimeSettings.hostPrivacyPolicy.mode == .secureOverlay else {
+            Task { await appState.lockHostForPrivacy() }
+            return
+        }
+
+        let readiness = appState.secureLockReadiness()
+        switch readiness {
+        case .ready:
+            Task { await appState.lockHostForPrivacy() }
+        case .needsAppPassword:
+            secureSetupPassword = ""
+            secureSetupConfirmPassword = ""
+            secureSetupError = nil
+            showSecurePasswordSetup = true
+        case .noSafeDisplayDuringCapture, .lockedOut:
+            appState.reportSecureLockReadiness(readiness)
+        }
+    }
+
+    private func saveSecurePasswordAndLock() {
+        let password = secureSetupPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let confirmation = secureSetupConfirmPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard password.isEmpty == false else {
+            secureSetupError = "A senha não pode estar em branco."
+            return
+        }
+        guard password == confirmation else {
+            secureSetupError = "As duas senhas precisam ser iguais."
+            return
+        }
+
+        guard appState.setAppPassword(password) else {
+            secureSetupError = appState.lastOperationMessage ?? "Não foi possível salvar a senha."
+            return
+        }
+
+        resetSecurePasswordSetup()
+        Task { await appState.lockHostForPrivacy() }
+    }
+
+    private func resetSecurePasswordSetup() {
+        showSecurePasswordSetup = false
+        secureSetupPassword = ""
+        secureSetupConfirmPassword = ""
+        secureSetupError = nil
     }
 }
 
@@ -1234,7 +1329,6 @@ struct SettingsView: View {
                 GroupBox("Bloqueio seguro") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Permitir Touch ID / senha do macOS", isOn: secureAllowMacOSAuthBinding)
-                        Toggle("Permitir senha do MacStream", isOn: secureAllowAppPasswordBinding)
                         Stepper(value: secureMaxAttemptsBinding, in: 1...20) {
                             Text("Tentativas antes do lockout: \(appState.runtimeSettings.hostPrivacyPolicy.secureMaxUnlockAttempts)")
                         }
@@ -1249,7 +1343,7 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        Text("Quando o modo é acionado, cada display físico fica preto. O painel de senha aparece apenas em telas não capturadas pelo Moonlight. O cliente remoto continua vendo o desktop normalmente.")
+                        Text("A senha do MacStream é obrigatória como fallback e fica no Keychain. Touch ID / senha do macOS é usado como caminho preferencial quando disponível. O painel de senha aparece apenas em telas não capturadas pelo Moonlight.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1301,8 +1395,8 @@ struct SettingsView: View {
                         Label("Uma senha está configurada no Keychain do macOS.", systemImage: "checkmark.shield")
                             .foregroundStyle(.green)
                     } else {
-                        Label("Nenhuma senha configurada — o desbloqueio fica livre.", systemImage: "exclamationmark.shield")
-                            .foregroundStyle(.secondary)
+                        Label("Nenhuma senha configurada — o primeiro bloqueio seguro vai pedir uma senha fallback.", systemImage: "exclamationmark.shield")
+                            .foregroundStyle(.orange)
                     }
 
                     Toggle("Exigir senha para desbloquear a tela do host", isOn: appPasswordRequireBinding)
@@ -1347,7 +1441,7 @@ struct SettingsView: View {
                         Spacer()
                     }
 
-                    Text("Essa senha é separada da senha do macOS — fica guardada apenas no Keychain do app e protege o desbloqueio da tela do host.")
+                    Text("Essa senha é separada da senha do macOS. No bloqueio seguro ela é fallback obrigatório; no bloqueio legado ela só é exigida quando a opção acima estiver ativa.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1566,17 +1660,6 @@ struct SettingsView: View {
         )
     }
 
-    private var secureAllowAppPasswordBinding: Binding<Bool> {
-        Binding(
-            get: { appState.runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword },
-            set: { value in
-                var policy = appState.runtimeSettings.hostPrivacyPolicy
-                policy.secureAllowAppPassword = value
-                Task { await appState.updateHostPrivacyPolicy(policy) }
-            }
-        )
-    }
-
     private var secureMaxAttemptsBinding: Binding<Int> {
         Binding(
             get: { appState.runtimeSettings.hostPrivacyPolicy.secureMaxUnlockAttempts },
@@ -1591,11 +1674,11 @@ struct SettingsView: View {
     private var hostLockModeExplanation: String {
         switch appState.runtimeSettings.hostPrivacyPolicy.mode {
         case .appOverlay:
-            return "Pinta a tela do host de preto apenas para quem estiver fisicamente no Mac. O cliente remoto continua vendo e usando o desktop normalmente — comportamento equivalente ao 'tela em branco' do TeamViewer/AnyDesk."
+            return "Modo legado: pinta a tela do host de preto sem exigir autenticação forte. Use apenas quando o bloqueio seguro for inviável."
         case .systemSuspend:
             return "Usa o bloqueio nativo do macOS (CGSession). Ainda não validado em streaming ativo — pode interromper vídeo/áudio/teclado se o macOS suspender a sessão gráfica."
         case .secureOverlay:
-            return "Overlay preto em TODAS as telas com senha obrigatória — opt-in. Estratégia assimétrica: brightness=0 na tela capturada (invisível ao Moonlight, painel da senha não aparece nela) + overlay preto + senha nas demais. Requer pelo menos uma forma de auth configurada (senha do MacStream OU Touch ID/senha do macOS)."
+            return "Padrão recomendado: overlay preto com senha obrigatória. Usa Touch ID / senha do macOS quando disponível e exige senha MacStream como fallback. Se houver risco de captura, o painel aparece só em tela não capturada."
         }
     }
 

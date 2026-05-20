@@ -167,11 +167,20 @@ struct MacStreamHostApp: App {
                     case .secure:
                         privacyOverlayController?.show(
                             mode: .secure(
-                                streamingActive: appState.remoteWorkSession.state.isStreamingActive,
+                                streamingActive: appState.secureLockCaptureRiskActive,
                                 streamedDisplayID: CGMainDisplayID()
                             )
                         )
                     }
+                }
+                .onChange(of: appState.secureLockoutUntil) { _, _ in
+                    guard appState.privacyOverlayMode == .secure else { return }
+                    privacyOverlayController?.show(
+                        mode: .secure(
+                            streamingActive: appState.secureLockCaptureRiskActive,
+                            streamedDisplayID: CGMainDisplayID()
+                        )
+                    )
                 }
         }
         .windowStyle(.titleBar)
@@ -196,7 +205,7 @@ struct MacStreamHostApp: App {
                 appState?.runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication ?? false
             },
             allowAppPassword: { [weak appState] in
-                appState?.runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword ?? false
+                appState?.isAppPasswordSet ?? false
             },
             macOSAuthAvailable: { [weak appState] in
                 appState?.localAuthenticationService.isAvailable() ?? false

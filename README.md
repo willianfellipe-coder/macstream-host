@@ -12,7 +12,7 @@ MacStream Host is intended to become a native macOS remote work product that hid
 
 ## Goal
 
-The goal is to let a user install the app, open it, understand missing permissions/dependencies, start or stop Remote Work Mode, validate audio/video/network readiness, keep the Mac awake during a session, optionally lock the host screen for privacy, and pair with Moonlight with as little friction as possible.
+The goal is to let a user install the app, open it, understand missing permissions/dependencies, start or stop Remote Work Mode, validate audio/video/network readiness, keep the Mac awake during a session, lock the local host screen safely for privacy, and pair with Moonlight with as little friction as possible.
 
 The app is not a Moonlight client. Sunshine remains the streaming engine and BlackHole remains an independent CoreAudio driver, but the normal MacStream UI treats them as managed internal components rather than user-facing products.
 
@@ -36,7 +36,7 @@ Implemented now:
 - Resident `macstream-agent` target launched by user LaunchAgent `com.macstream.host.agent`.
 - Remote Work Mode commands in app and CLI for prepare/start/stop/status/lock.
 - macOS keep-awake power assertions while Remote Work Mode is active.
-- Optional host privacy lock request using public macOS tooling.
+- Secure host privacy lock is the default: local overlay with Touch ID / macOS authentication when available, a mandatory MacStream Keychain password fallback, and conservative refusal when the only available display may be captured by Moonlight.
 - Safe Sunshine discovery/status, Web UI opening, and start/stop/restart using MacStream Host ownership metadata only.
 - SwiftUI Sunshine screen wired to local diagnostics, isolated config generation, Web UI opening, and owned process control.
 - SwiftUI operational dashboard with preflight CTA, first-run onboarding, dependency detection, Moonlight checklist, copyable pairing addresses, and support ZIP export.
@@ -54,6 +54,7 @@ Implemented now:
 - Unit tests for status rules, health checks, configuration validation, app state, settings, logs, LaunchAgent, reset, and test doubles.
 - Safe diagnostic scripts that do not install, delete, request `sudo`, or modify system settings.
 - GPL and third-party compliance documentation.
+- `docs/HOST_LOCK_SECURITY_PLAN.md` records the develop-branch plan and safety rules for secure host locking.
 
 Not implemented yet:
 

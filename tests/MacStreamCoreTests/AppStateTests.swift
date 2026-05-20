@@ -335,7 +335,25 @@ final class AppStateTests: XCTestCase {
         await appState.lockHostForPrivacy()
 
         XCTAssertEqual(appState.privacyOverlayMode, .none)
-        XCTAssertTrue(appState.lastOperationMessage?.contains("Configure uma senha") ?? false)
+        XCTAssertEqual(appState.secureLockReadiness(), .needsAppPassword)
+        XCTAssertTrue(appState.lastOperationMessage?.contains("senha do MacStream") ?? false)
+    }
+
+    @MainActor
+    func testLockHostInSecureModeWithBiometricsButNoAppPasswordRequiresFallbackSetup() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(),
+            localAuthenticationService: MockLocalAuthenticationService(available: true)
+        )
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+        XCTAssertEqual(appState.secureLockReadiness(), .needsAppPassword)
+        XCTAssertTrue(appState.lastOperationMessage?.contains("fallback") ?? false)
     }
 
     @MainActor
@@ -355,12 +373,31 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
-    func testLockHostInSecureModeWithBiometricsAvailableEntersSecureMode() async {
+    func testSavingAppPasswordThenLockingEntersSecureMode() async {
         var settings = MacStreamHostSettings.defaults()
         settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
         let appState = makeTestAppState(
             runtimeSettings: settings,
             appPasswordStore: InMemoryAppPasswordStore(),
+            localAuthenticationService: MockLocalAuthenticationService(available: true)
+        )
+
+        XCTAssertEqual(appState.secureLockReadiness(), .needsAppPassword)
+
+        XCTAssertTrue(appState.setAppPassword("fallback"))
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.secureLockReadiness(), .ready)
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+    }
+
+    @MainActor
+    func testLockHostInSecureModeWithBiometricsAvailableEntersSecureMode() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "fallback"),
             localAuthenticationService: MockLocalAuthenticationService(available: true)
         )
 
@@ -411,6 +448,7 @@ final class AppStateTests: XCTestCase {
         let la = MockLocalAuthenticationService(available: true, nextResult: .success(true))
         let appState = makeTestAppState(
             runtimeSettings: settings,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "fallback"),
             localAuthenticationService: la
         )
         await appState.lockHostForPrivacy()
@@ -476,6 +514,49 @@ final class AppStateTests: XCTestCase {
         let ok = appState.dismissPrivacyOverlay(passwordCandidate: nil)
 
         XCTAssertFalse(ok)
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+    }
+
+    @MainActor
+    func testSecureLockRefusesSingleDisplayWhenCaptureRiskIsActive() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let remote = MockRemoteWorkSessionManager()
+        remote.report.state = .running
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            remoteWork: remote,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "fallback"),
+            displayInventory: MockDisplayInventoryProvider(displays: [1], streamed: 1)
+        )
+        await appState.refresh()
+
+        XCTAssertEqual(appState.secureLockReadiness(), .noSafeDisplayDuringCapture)
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .none)
+        XCTAssertTrue(appState.lastOperationMessage?.contains("tela não capturada") ?? false)
+    }
+
+    @MainActor
+    func testSecureLockAllowsSecondDisplayWhenCaptureRiskIsActive() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let remote = MockRemoteWorkSessionManager()
+        remote.report.state = .running
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            remoteWork: remote,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "fallback"),
+            displayInventory: MockDisplayInventoryProvider(displays: [1, 2], streamed: 1)
+        )
+        await appState.refresh()
+
+        XCTAssertEqual(appState.secureLockReadiness(), .ready)
+
+        await appState.lockHostForPrivacy()
+
         XCTAssertEqual(appState.privacyOverlayMode, .secure)
     }
 }

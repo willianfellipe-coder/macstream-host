@@ -67,7 +67,7 @@ struct MenuBarContent: View {
                 .foregroundStyle(.orange)
         case .none:
             Button("Bloquear tela do host") {
-                Task { await appState.lockHostForPrivacy() }
+                requestHostLockFromMenu()
             }
             .disabled(!appState.runtimeSettings.hostPrivacyPolicy.allowManualLock)
         }
@@ -166,6 +166,24 @@ struct MenuBarContent: View {
         for window in NSApp.windows where window.canBecomeMain {
             window.makeKeyAndOrderFront(nil)
             return
+        }
+    }
+
+    private func requestHostLockFromMenu() {
+        guard appState.runtimeSettings.hostPrivacyPolicy.mode == .secureOverlay else {
+            Task { await appState.lockHostForPrivacy() }
+            return
+        }
+
+        let readiness = appState.secureLockReadiness()
+        switch readiness {
+        case .ready:
+            Task { await appState.lockHostForPrivacy() }
+        case .needsAppPassword:
+            appState.reportSecureLockReadiness(readiness)
+            openMainWindow()
+        case .noSafeDisplayDuringCapture, .lockedOut:
+            appState.reportSecureLockReadiness(readiness)
         }
     }
 }

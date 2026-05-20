@@ -16,7 +16,7 @@ The reference documents define MacStream Host as a native macOS SwiftUI app that
 - Safe diagnostics for permissions, audio, network, Sunshine status, logs, and pairing.
 - Resident `macstream-agent` launched by user LaunchAgent `com.macstream.host.agent`, with explicit safety boundaries and no `sudo`.
 - Native keep-awake power assertions during active remote work sessions.
-- Optional host lock request for privacy, gated behind user action until end-to-end validation proves it does not break streaming.
+- Secure host lock by default: local-only overlay with mandatory MacStream Keychain password fallback, optional Touch ID / macOS password unlock, and conservative refusal when no non-captured display can host the password panel.
 - Web UI advanced access preserved; native pairing only after a stable API is validated.
 
 ## First Architecture Decisions
@@ -86,7 +86,7 @@ The resident architecture is user-scoped:
 - `LaunchAgentManager` writes `~/Library/LaunchAgents/com.macstream.host.agent.plist`.
 - The plist launches `macstream-agent run`, not Sunshine directly.
 - App/CLI write codable command files under `~/Library/Application Support/MacStreamHost/Agent/`.
-- The agent reads commands, starts/stops only the owned video engine, activates/releases IOPM keep-awake assertions, handles optional host lock requests, and writes `status.json`.
+- The agent reads commands, starts/stops only the owned video engine, activates/releases IOPM keep-awake assertions, handles host lock requests, and writes `status.json`.
 - App/CLI read `status.json` for `RemoteWorkSessionReport` and surface user-facing Remote Work Mode state.
 
 ## Key Risks And Gaps
@@ -108,5 +108,7 @@ Sunshine process control is intentionally narrow. `start` requires the isolated 
 Upgrade safety is part of this ownership model: if a stored owned process points to an old binary path but the resolver now points to the nested `Sunshine.app`, `start` terminates the stale owned process, clears metadata, and launches the current engine. `restart` also clears stale ownership mismatch before starting fresh. This prevents a broken legacy `MacStreamEngine` process from being reported as healthy after a package-layout fix.
 
 The app does not kill or adopt an existing user-managed Sunshine process. The SwiftUI Sunshine screen calls the same safe manager methods through `AppState`, then refreshes diagnostics and publishes a user-visible operation message.
+
+Secure host lock is coordinated in `AppState` and rendered by the app process, not by the video engine. `SecureLockReadiness` separates product decisions before locking: ready, missing MacStream password, no safe display during capture risk, or lockout. During capture risk, the streamed display may only be dimmed through panel/backlight paths; the password panel is rendered only on a non-streamed display. If no such display exists, lock is refused rather than risking a password or overlay leak into Moonlight.
 
 LaunchAgent support renders, validates, installs, loads, unloads, and removes only `com.macstream.host.agent` for the current user. It validates the MacStream agent executable and log directory before install/load. Audio diagnostics, network diagnostics, and permission diagnostics remain safe local checks.

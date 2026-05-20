@@ -264,8 +264,8 @@ public struct HostPrivacyPolicy: Codable, Equatable {
     /// Allow Touch ID / macOS user password (LocalAuthentication) as an
     /// unlock method when `mode == .secureOverlay`. Ignored for other modes.
     public var secureAllowMacOSAuthentication: Bool
-    /// Allow the MacStream app password (Keychain) as an unlock method
-    /// when `mode == .secureOverlay`. Ignored for other modes.
+    /// Legacy compatibility flag for older settings JSON. Secure lock now
+    /// treats the MacStream app password as a mandatory fallback.
     public var secureAllowAppPassword: Bool
     /// Cap on consecutive wrong unlock attempts before the secure overlay
     /// enters a temporal lockout. Backoff is 30s × attempt, capped at 5min.
@@ -274,7 +274,7 @@ public struct HostPrivacyPolicy: Codable, Equatable {
     public init(
         offerLockOnSessionStart: Bool = true,
         allowManualLock: Bool = true,
-        mode: HostPrivacyMode = .appOverlay,
+        mode: HostPrivacyMode = .secureOverlay,
         secureAllowMacOSAuthentication: Bool = true,
         secureAllowAppPassword: Bool = true,
         secureMaxUnlockAttempts: Int = 5
@@ -307,6 +307,31 @@ public struct HostPrivacyPolicy: Codable, Equatable {
     }
 
     public static let defaults = HostPrivacyPolicy()
+}
+
+public enum SecureLockReadiness: Equatable {
+    case ready
+    case needsAppPassword
+    case noSafeDisplayDuringCapture
+    case lockedOut(secondsRemaining: Int)
+
+    public var isReady: Bool {
+        if case .ready = self { return true }
+        return false
+    }
+
+    public var userMessage: String {
+        switch self {
+        case .ready:
+            return "Bloqueio seguro pronto."
+        case .needsAppPassword:
+            return "Configure uma senha do MacStream antes de bloquear. Ela fica no Keychain e serve como fallback ao Touch ID / senha do macOS."
+        case .noSafeDisplayDuringCapture:
+            return "Bloqueio seguro precisa de uma tela não capturada pelo Moonlight. Conecte outro display ou encerre a sessão antes de bloquear."
+        case .lockedOut(let secondsRemaining):
+            return "Tentativas excedidas. Aguarde \(secondsRemaining) segundos antes de tentar novamente."
+        }
+    }
 }
 
 public enum HostPrivacyAction: String, Codable, Equatable, CaseIterable {

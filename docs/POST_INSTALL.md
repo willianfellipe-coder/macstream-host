@@ -138,27 +138,31 @@ Quem quiser ouvir local **e** transmitir ao mesmo tempo continua podendo
 instalar BlackHole 2ch manualmente (não acompanha o app) e configurar
 um Multi-Output Device em Audio MIDI Setup. Isso é opcional.
 
-## Bloqueio seguro (opt-in)
+## Bloqueio seguro
 
-A partir de 2026-05-18, MacStream Host suporta um modo de bloqueio com
-senha obrigatória que cobre TODAS as telas físicas do Mac com overlay
-preto enquanto o cliente Moonlight continua vendo o desktop normalmente.
+MacStream Host usa bloqueio seguro como modo padrão. Ele cobre as telas
+físicas locais com overlay preto e exige autenticação local, enquanto o
+cliente Moonlight continua vendo e usando o desktop normalmente.
 
-### Como ativar
+### Primeiro bloqueio
 
-1. **Ajustes → Modo remoto → Modo de bloqueio do host** → escolha
-   `Bloqueio seguro com senha`.
-2. No card "Bloqueio seguro" que aparece logo abaixo:
-   - Mantenha `Permitir Touch ID / senha do macOS` ativo se o Mac já
-     tem senha de usuário configurada. Funciona até em Macs sem Touch
-     ID (fallback automático pra senha).
-   - Mantenha `Permitir senha do MacStream` ativo se você quer usar
-     uma senha dedicada (configure-a em **Ajustes → Senha do app**).
-   - Pelo menos **um** dos dois métodos precisa estar configurado, ou
-     o botão "Bloquear host" recusa a ação e abre Ajustes.
-3. Ajuste `Tentativas antes do lockout` se quiser (default 5). Após
-   exceder, o painel entra em backoff temporal (30s × tentativa extra,
-   cap 5 min). Não é lockout permanente.
+No primeiro clique em **Bloquear host**, se ainda não houver senha
+MacStream:
+
+1. O app mostra uma sheet local para criar a senha.
+2. A senha precisa ser não vazia e a confirmação precisa bater.
+3. A senha é salva no Keychain do macOS, separada da senha do usuário.
+4. O bloqueio seguro começa automaticamente depois de salvar.
+
+Touch ID / senha do macOS é o caminho preferencial de desbloqueio
+quando disponível, mas a senha MacStream continua obrigatória como
+fallback local. O app nunca lê a senha do macOS; usa apenas
+LocalAuthentication.
+
+Em **Ajustes → Modo remoto**, mantenha `Permitir Touch ID / senha do
+macOS` ativo se quiser o prompt nativo. Ajuste `Tentativas antes do
+lockout` se quiser (default 5). Após exceder, o painel entra em backoff
+temporal (30s × tentativa extra, cap 5 min). Não é lockout permanente.
 
 ### O que acontece quando você clica "Bloquear host"
 
@@ -175,20 +179,18 @@ preto enquanto o cliente Moonlight continua vendo o desktop normalmente.
 
 | Situação | Comportamento |
 |---|---|
-| Único display + Moonlight ativo | Pre-flight rejeita: "Bloqueio seguro precisa de pelo menos uma tela não capturada." Desconecte o cliente ou conecte outra tela antes de bloquear. |
+| Único display + Sunshine/Moonlight ativo | Pre-flight rejeita: "Bloqueio seguro precisa de uma tela não capturada pelo Moonlight." Conecte outro display ou encerre a sessão antes de bloquear. |
 | Despluga um monitor durante o lock | O controlador observa `didChangeScreenParametersNotification` e reconstrói as janelas. Painel de senha migra para outra tela não capturada. |
 | Esqueceu a senha do MacStream | Use Touch ID / senha do macOS (se ativado). Recovery sem precisar reinstalar. |
 | Quer escapar pelo tray | Em modo seguro, o item de unlock do tray é desabilitado deliberadamente. Desbloqueio só pelo painel local. |
 | Pressiona `Cmd+Q` ou clica fora | Não desbloqueia. O `SecureLockWindow` é key + screenSaver level. |
 | Moonlight desconecta com host travado | Auto-release: o `streamEndWatcher` detecta `CLIENT DISCONNECTED` na sunshine.log e libera (não tem mais cliente pra proteger). |
 
-### Por que não usar só este modo
+### Modo legado
 
-- `Bloqueio seguro` ainda exige configuração manual (senha) — modo
-  default continua sendo `Overlay no app (seguro)` que só escurece,
-  sem fricção pra novos usuários.
-- Não cobre o caso de display único capturado durante streaming — o
-  modo dim-only continua funcionando nesse cenário.
+`Overlay no app (seguro)` permanece disponível como modo legado em
+Ajustes, mas não é o padrão. Ele escurece displays sem a mesma barreira
+de autenticação local do bloqueio seguro.
 
 ## Troubleshooting
 

@@ -4,6 +4,24 @@ All notable changes to MacStream Host will be documented here.
 
 ## Unreleased
 
+### Make secure host lock the default on develop (2026-05-19)
+
+- Created and published `develop` as the permanent development branch
+  from `main` at merge `349b3bd`.
+- Added `docs/HOST_LOCK_SECURITY_PLAN.md` before implementation to
+  record product decisions, capture-safety rules, first-lock flow, and
+  validation requirements.
+- Made `HostPrivacyPolicy.defaults` use `.secureOverlay` for new
+  installs while preserving legacy `appOverlay` JSON decoding.
+- Added `SecureLockReadiness` so UI can distinguish ready, missing
+  MacStream password, no safe display during capture risk, and lockout.
+- Made the MacStream Keychain password mandatory as secure-lock fallback
+  even when Touch ID / macOS authentication is available.
+- Updated Dashboard and menu bar lock flows: first lock opens a local
+  password setup sheet; secure lock refuses single-display capture-risk
+  scenarios instead of risking overlay leakage into Moonlight.
+- Updated docs for the new default secure-lock behavior.
+
 ### Restore Sunshine.app packaging and prevent flat-helper regressions (2026-05-19)
 
 User report: after recent changes, Moonlight could not connect to

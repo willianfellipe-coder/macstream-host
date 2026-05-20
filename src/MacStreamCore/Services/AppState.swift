@@ -28,10 +28,12 @@ public enum PrivacyOverlayMode: Equatable {
 /// the dashboard / tray can present a recovery sheet instead of failing
 /// silently or entering a broken state.
 public enum SecureLockError: Error, LocalizedError, Equatable {
-    /// No unlock method available: no app password set AND
-    /// LocalAuthentication unavailable on this Mac. UI should route the
-    /// user to Settings → Senha do app or to System Settings → Touch ID
-    /// & Senha.
+    /// Secure lock now requires a MacStream app password as a local
+    /// fallback even when LocalAuthentication is available.
+    case needsAppPassword
+    /// Legacy fallback for impossible auth combinations. Current secure
+    /// lock readiness normally returns `.needsAppPassword` first because
+    /// the MacStream password is mandatory.
     case noAuthAvailable
     /// Streaming is active and the host has only one display — the same
     /// one Sunshine is capturing. There is no safe display to host the
@@ -45,12 +47,14 @@ public enum SecureLockError: Error, LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
+        case .needsAppPassword:
+            return SecureLockReadiness.needsAppPassword.userMessage
         case .noAuthAvailable:
             return "Bloqueio seguro exige uma forma de desbloqueio. Configure uma senha do MacStream em Ajustes ou ative Touch ID / senha do macOS."
         case .noSafeDisplayDuringStream:
-            return "Bloqueio seguro precisa de pelo menos uma tela não capturada pelo Moonlight. Desconecte a sessão ou conecte outro display antes de bloquear."
+            return SecureLockReadiness.noSafeDisplayDuringCapture.userMessage
         case .lockedOut(let secondsRemaining):
-            return "Tentativas excedidas. Aguarde \(secondsRemaining) segundos antes de tentar novamente."
+            return SecureLockReadiness.lockedOut(secondsRemaining: secondsRemaining).userMessage
         }
     }
 }
@@ -693,37 +697,56 @@ public final class AppState: ObservableObject {
     }
 
     /// True when the user can actually unlock the secure overlay — at
-    /// least one of the policy-enabled methods has its dependency
-    /// satisfied (password set OR LocalAuth available).
+    /// least the mandatory MacStream fallback password exists. macOS
+    /// authentication can be offered as the preferred path, but it never
+    /// replaces the app password fallback.
     public var secureUnlockAvailable: Bool {
-        let policy = runtimeSettings.hostPrivacyPolicy
-        let pwdReady = policy.secureAllowAppPassword && isAppPasswordSet
-        let laReady = policy.secureAllowMacOSAuthentication && localAuthenticationService.isAvailable()
-        return pwdReady || laReady
+        isAppPasswordSet
+    }
+
+    public var secureLockCaptureRiskActive: Bool {
+        remoteWorkSession.state.isStreamingActive
+            || dashboard.sunshineStatus.state.isOperational
+    }
+
+    public func secureLockReadiness() -> SecureLockReadiness {
+        if let until = secureLockoutUntil, until > dateProvider() {
+            let seconds = Int(until.timeIntervalSince(dateProvider()).rounded(.up))
+            return .lockedOut(secondsRemaining: seconds)
+        }
+
+        guard isAppPasswordSet else {
+            return .needsAppPassword
+        }
+
+        if secureLockCaptureRiskActive {
+            let displays = displayInventory.activeDisplayIDs()
+            let streamed = displayInventory.streamedDisplayID()
+            let safeDisplays = displays.filter { $0 != streamed }
+            if safeDisplays.isEmpty {
+                return .noSafeDisplayDuringCapture
+            }
+        }
+
+        return .ready
+    }
+
+    public func reportSecureLockReadiness(_ readiness: SecureLockReadiness) {
+        lastOperationMessage = readiness.userMessage
     }
 
     /// Pre-flight runs synchronously before flipping the overlay mode.
     /// Throws `SecureLockError` cases the UI can match on.
     public func enterSecureLockPreflight() throws {
-        guard secureUnlockAvailable else {
-            throw SecureLockError.noAuthAvailable
-        }
-        // During an active stream, we need at least one display that
-        // Sunshine ISN'T capturing — that's where the password panel
-        // renders without leaking. Single-display streamed hosts can
-        // only enter secure lock after disconnecting Moonlight.
-        let streaming = remoteWorkSession.state.isStreamingActive
-        if streaming {
-            let displays = displayInventory.activeDisplayIDs()
-            let streamed = displayInventory.streamedDisplayID()
-            let safeDisplays = displays.filter { $0 != streamed }
-            if safeDisplays.isEmpty {
-                throw SecureLockError.noSafeDisplayDuringStream
-            }
-        }
-        if let until = secureLockoutUntil, until > dateProvider() {
-            let seconds = Int(until.timeIntervalSince(dateProvider()).rounded(.up))
-            throw SecureLockError.lockedOut(secondsRemaining: seconds)
+        switch secureLockReadiness() {
+        case .ready:
+            return
+        case .needsAppPassword:
+            throw SecureLockError.needsAppPassword
+        case .noSafeDisplayDuringCapture:
+            throw SecureLockError.noSafeDisplayDuringStream
+        case .lockedOut(let secondsRemaining):
+            throw SecureLockError.lockedOut(secondsRemaining: secondsRemaining)
         }
     }
 
@@ -735,10 +758,6 @@ public final class AppState: ObservableObject {
     public func dismissSecureOverlay(withAppPassword candidate: String) -> Bool {
         guard privacyOverlayMode == .secure else { return false }
         if let until = secureLockoutUntil, until > dateProvider() { return false }
-        guard runtimeSettings.hostPrivacyPolicy.secureAllowAppPassword else {
-            lastOperationMessage = "Desbloqueio por senha do MacStream está desativado nas configurações."
-            return false
-        }
         if appPasswordStore.verify(candidate) {
             return finishSecureUnlock()
         }
@@ -831,10 +850,6 @@ public final class AppState: ObservableObject {
         isAppPasswordSet && runtimeSettings.appPasswordPolicy.requireOnOverlayUnlock
     }
 
-    /// Attempts to dismiss the privacy overlay. When a password is required,
-    /// the caller must pass the user-entered candidate. Returns true on success,
-    /// false when the candidate is wrong (UI should display an error).
-    @discardableResult
     /// Hook the UI layer can call after the overlay has tried to dim displays.
     /// Surfaces the result through the same lastOperationMessage channel as
     /// other ops so the user immediately sees whether the lock actually
@@ -884,13 +899,16 @@ public final class AppState: ObservableObject {
         return true
     }
 
-    public func setAppPassword(_ password: String) {
+    @discardableResult
+    public func setAppPassword(_ password: String) -> Bool {
         do {
             try appPasswordStore.setPassword(password)
             isAppPasswordSet = appPasswordStore.isPasswordSet()
             lastOperationMessage = "Senha do app salva."
+            return true
         } catch {
             lastOperationMessage = error.localizedDescription
+            return false
         }
     }
 

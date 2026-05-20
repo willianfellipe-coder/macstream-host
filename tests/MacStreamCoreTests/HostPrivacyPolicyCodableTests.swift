@@ -54,13 +54,11 @@ final class HostPrivacyPolicyCodableTests: XCTestCase {
         XCTAssertEqual(decoded.mode, .secureOverlay)
     }
 
-    func testDefaultsRemainBackwardsCompatible() {
-        // The factory defaults should keep .appOverlay as the chosen
-        // mode — secureOverlay is opt-in. If someone flips the default
-        // by mistake, callers that don't explicitly pick a mode would
-        // suddenly enter secure mode without auth configured.
+    func testDefaultsUseSecureOverlayForNewInstalls() {
+        // New installs should use secure lock by default. Legacy JSON
+        // with an explicit appOverlay value is still covered above.
         let defaults = HostPrivacyPolicy.defaults
-        XCTAssertEqual(defaults.mode, .appOverlay)
+        XCTAssertEqual(defaults.mode, .secureOverlay)
         XCTAssertTrue(defaults.secureAllowMacOSAuthentication)
         XCTAssertTrue(defaults.secureAllowAppPassword)
         XCTAssertEqual(defaults.secureMaxUnlockAttempts, 5)
