@@ -45,10 +45,11 @@ or secure overlay.
 - Treat an active or potentially active Sunshine capture conservatively.
 - Never create a password-panel `NSWindow` on the streamed display
   during capture risk.
-- The streamed display may receive only a visual local shield: full
-  screen, black, non-key, mouse-transparent, and `sharingType = .none`.
-  Brightness can be used as a reinforcement, but not as the security
-  boundary.
+- The streamed display must not receive any `NSWindow`, including
+  `sharingType = .none` windows, because empirical Moonlight validation
+  showed that ScreenCaptureKit still captures them.
+- The streamed display uses only panel/backlight dimming plus an active
+  watchdog that reapplies dimming while secure lock is enabled.
 - Render the password panel only on a non-streamed physical display.
 - If capture risk exists and there is no non-streamed physical display,
   refuse secure lock with a clear recovery message.
@@ -92,8 +93,9 @@ Manual QA must cover:
 
 - One physical display plus active Moonlight: secure lock is refused with
   a clear message.
-- Two physical displays plus active Moonlight: every local display is
-  visually shielded; password panel appears only on the safe display.
+- Two physical displays plus active Moonlight: the streamed display is
+  dimmed with watchdog and no window; the safe display gets the overlay
+  and password panel.
 - Moonlight continues to receive desktop video and input.
 - Lock UI never appears in Moonlight.
 - Remote keyboard input cannot type into the secure panel.

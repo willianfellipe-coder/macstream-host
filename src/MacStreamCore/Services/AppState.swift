@@ -19,8 +19,8 @@ public enum PrivacyOverlayMode: Equatable {
     /// mandatory password.
     case classic
     /// Secure overlay — `HostPrivacyMode.secureOverlay`.
-    /// Full-screen local shield on every display with the mandatory
-    /// password panel only on a safe non-streamed display.
+    /// Full-screen local shield on non-streamed displays with the
+    /// mandatory password panel only on a safe non-streamed display.
     case secure
 }
 

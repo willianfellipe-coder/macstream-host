@@ -11,10 +11,9 @@ final class PrivacyOverlayController {
         /// physical displays. Equivalent to the pre-secure behavior.
         case classic(suppressPanel: Bool)
         /// Asymmetric secure overlay: full-screen black NSWindow on every
-        /// display, with the password panel only on a safe non-streamed
-        /// display. The streamed display gets a visual-only local shield
-        /// (`sharingType = .none`) so brightness is no longer the security
-        /// boundary.
+        /// non-streamed display, with the password panel only on a safe
+        /// non-streamed display. The streamed display uses panel/backlight
+        /// dimming plus a watchdog so the overlay never leaks to Moonlight.
         case secure(streamingActive: Bool, streamedDisplayID: CGDirectDisplayID?)
     }
 
@@ -44,6 +43,7 @@ final class PrivacyOverlayController {
     private let onUnlock: (String?) -> Bool
     private let onDimResult: (DisplayDimResult) -> Void
     private let secureContext: SecureContext?
+    private var brightnessWatchdog: Timer?
 
     /// Active secure-mode parameters, captured at `show(...)` time so the
     /// screen-parameter observer can rebuild without re-resolving.
@@ -157,19 +157,17 @@ final class PrivacyOverlayController {
 
     // MARK: - Secure mode
 
-    /// Asymmetric secure overlay. The streamed display cannot host the
-    /// password panel because remote synthetic input would be able to
-    /// target it. It still gets a full-screen local black shield marked
-    /// as non-shareable, so raising panel brightness does not reveal the
-    /// desktop. If `sharingType = .none` leaks on a future macOS/SCK path,
-    /// the correct product behavior is to refuse that display topology
-    /// rather than fall back to brightness as a "lock".
+    /// Asymmetric secure overlay. The streamed display cannot host any
+    /// `NSWindow` because ScreenCaptureKit captures it even with
+    /// `sharingType = .none`. The streamed display therefore uses
+    /// panel/backlight dimming plus a watchdog; password UI exists only
+    /// on a non-streamed physical display.
     ///
     /// Per-display strategy:
     ///   - Streamed display (Sunshine's capture target), while streaming:
-    ///       a full-screen, non-key, mouse-transparent black shield with
-    ///       no password UI. The local viewer sees a locked screen; the
-    ///       remote viewer should keep seeing the live desktop.
+    ///       panel/backlight dimming only. No NSWindow, no password UI.
+    ///       A watchdog reapplies dimming while locked so brightness-key
+    ///       changes do not leave the host visible.
     ///   - Every other display: a full-screen black NSWindow covering
     ///       the entire `screen.frame` (including the menu bar area),
     ///       with the password panel hosted on the "safe display"
@@ -186,6 +184,7 @@ final class PrivacyOverlayController {
         unlockPanel = nil
         secureWindows.forEach { $0.orderOut(nil) }
         secureWindows.removeAll()
+        stopBrightnessWatchdog()
 
         activeSecureMode = (streamingActive, streamedDisplayID)
 
@@ -195,12 +194,14 @@ final class PrivacyOverlayController {
         for screen in screens {
             let id = displayID(for: screen)
             let isStreamedDisplay = streamingActive && streamedDisplayID != nil && id == streamedDisplayID
+            // Do not put any NSWindow on the streamed display. Empirical
+            // Moonlight validation shows ScreenCaptureKit still captures
+            // this overlay even with sharingType = .none.
+            if isStreamedDisplay {
+                continue
+            }
             let isSafePanel = (screen === safeScreen)
-            let window = makeSecureWindow(
-                on: screen,
-                withUnlockPanel: isSafePanel,
-                visualOnly: isStreamedDisplay
-            )
+            let window = makeSecureWindow(on: screen, withUnlockPanel: isSafePanel)
             secureWindows.append(window)
             window.orderFrontRegardless()
             if isSafePanel {
@@ -211,10 +212,9 @@ final class PrivacyOverlayController {
             }
         }
 
-        // Belt-and-suspenders dim: the lock is the full-screen shield,
-        // not brightness. Dimming still makes built-in panels less
-        // distracting and covers the short interval before the window is
-        // composited.
+        // The streamed display cannot receive a window without leaking
+        // into Moonlight, so keep its panel/backlight dimmed and enforce
+        // that state while the secure lock is active.
         let result = brightness.dimAllDisplays(
             except: nil,
             streamedDisplayID: streamingActive ? streamedDisplayID : nil,
@@ -222,6 +222,9 @@ final class PrivacyOverlayController {
         )
         lastResult = result
         onDimResult(result)
+        if streamingActive {
+            startBrightnessWatchdog(streamedDisplayID: streamedDisplayID)
+        }
 
         // Watch for monitor (un)plug events so we don't end up with
         // stale windows on a display that's gone or a missing window on
@@ -240,11 +243,7 @@ final class PrivacyOverlayController {
     /// Builds a single per-display secure window. When `withUnlockPanel`
     /// is true the SwiftUI password panel is hosted as the contentView;
     /// otherwise the window stays pure black with no controls.
-    private func makeSecureWindow(
-        on screen: NSScreen,
-        withUnlockPanel: Bool,
-        visualOnly: Bool
-    ) -> SecureLockWindow {
+    private func makeSecureWindow(on screen: NSScreen, withUnlockPanel: Bool) -> SecureLockWindow {
         let window = SecureLockWindow(
             contentRect: screen.frame,
             styleMask: .borderless,
@@ -258,7 +257,7 @@ final class PrivacyOverlayController {
         window.isOpaque = true
         window.hasShadow = false
         window.sharingType = .none
-        window.ignoresMouseEvents = visualOnly
+        window.ignoresMouseEvents = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         if withUnlockPanel, let context = secureContext {
@@ -342,6 +341,29 @@ final class PrivacyOverlayController {
         showSecure(streamingActive: mode.streamingActive, streamedDisplayID: mode.streamedDisplayID)
     }
 
+    private func startBrightnessWatchdog(streamedDisplayID: CGDirectDisplayID?) {
+        stopBrightnessWatchdog()
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                _ = self.brightness.dimAllDisplays(
+                    except: nil,
+                    streamedDisplayID: streamedDisplayID,
+                    streamingActive: true
+                )
+            }
+        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        brightnessWatchdog = timer
+    }
+
+    private func stopBrightnessWatchdog() {
+        brightnessWatchdog?.invalidate()
+        brightnessWatchdog = nil
+    }
+
     // MARK: - Screen helpers
 
     /// Returns the screen the user is actively interacting with, falling
@@ -373,6 +395,7 @@ final class PrivacyOverlayController {
     // MARK: - Hide
 
     func hide() {
+        stopBrightnessWatchdog()
         brightness.restoreAllDisplays()
         unlockPanel?.orderOut(nil)
         unlockPanel = nil

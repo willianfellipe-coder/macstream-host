@@ -241,9 +241,9 @@ public enum HostPrivacyMode: String, Codable, Equatable, CaseIterable {
     /// Invoke `CGSession -suspend`. May suspend the user's graphical session,
     /// which is unvalidated against Sunshine streaming and therefore experimental.
     case systemSuspend
-    /// Secure overlay: a true black local shield on every display with
-    /// mandatory password (app pwd or Touch ID/macOS pwd). The password
-    /// panel is hosted only on a safe non-streamed display.
+    /// Secure overlay: a true black local shield on non-streamed displays
+    /// with mandatory password (app pwd or Touch ID/macOS pwd). The
+    /// password panel is hosted only on a safe non-streamed display.
     case secureOverlay
 
     public var displayName: String {
