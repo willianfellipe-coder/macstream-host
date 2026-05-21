@@ -4,6 +4,20 @@ import XCTest
 @testable import MacStreamCore
 
 final class PowerAndPrivacyManagerTests: XCTestCase {
+    func testDefaultPowerPolicyKeepsDisplayAwakeForStreaming() {
+        XCTAssertTrue(PowerPolicy.defaults.preventSystemSleep)
+        XCTAssertTrue(PowerPolicy.defaults.keepDisplayAwake)
+    }
+
+    func testRemoteStreamingPolicyUpgradesLegacySystemOnlyPolicy() {
+        let legacy = PowerPolicy(preventSystemSleep: true, keepDisplayAwake: false)
+
+        XCTAssertEqual(
+            legacy.remoteStreamingPolicy,
+            PowerPolicy(preventSystemSleep: true, keepDisplayAwake: true)
+        )
+    }
+
     func testPowerAssertionManagerAcquiresAndReleasesProviderAssertion() async throws {
         let provider = FakePowerAssertionProvider()
         let manager = DefaultPowerAssertionManager(provider: provider)

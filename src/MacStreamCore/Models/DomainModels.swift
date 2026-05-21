@@ -177,12 +177,17 @@ public struct PowerPolicy: Codable, Equatable {
     public var preventSystemSleep: Bool
     public var keepDisplayAwake: Bool
 
-    public init(preventSystemSleep: Bool = true, keepDisplayAwake: Bool = false) {
+    public init(preventSystemSleep: Bool = true, keepDisplayAwake: Bool = true) {
         self.preventSystemSleep = preventSystemSleep
         self.keepDisplayAwake = keepDisplayAwake
     }
 
     public static let defaults = PowerPolicy()
+
+    public var remoteStreamingPolicy: PowerPolicy {
+        guard preventSystemSleep else { return self }
+        return PowerPolicy(preventSystemSleep: preventSystemSleep, keepDisplayAwake: true)
+    }
 }
 
 public struct PowerAssertionStatus: Codable, Equatable {

@@ -110,6 +110,7 @@ private final class AgentRuntime {
     /// stopped running anyway — typically the
     /// `+[AVVideo displayNames]` NSDictionary-nil crash post sleep/wake).
     private var lastSeenEnginePID: Int32?
+    private var lastNetworkAddresses: [String]?
 
     init() {
         commandDecoder = JSONDecoder()
@@ -166,6 +167,21 @@ private final class AgentRuntime {
         let status = await runtime.sunshine.status()
         switch status.state {
         case .running:
+            let addresses = await runtime.network.runDiagnostics().localAddresses
+            if addresses.isEmpty == false {
+                if let lastNetworkAddresses, lastNetworkAddresses != addresses {
+                    logger.warn("network topology changed from \(lastNetworkAddresses.joined(separator: ",")) to \(addresses.joined(separator: ",")); restarting engine")
+                    do {
+                        try await runtime.sunshine.restart()
+                        self.lastNetworkAddresses = addresses
+                        lastSeenEnginePID = nil
+                    } catch {
+                        logger.error("engine restart after network change failed: \(error.localizedDescription)")
+                    }
+                    return
+                }
+                lastNetworkAddresses = addresses
+            }
             // Healthy. Remember the current PID so we'd notice if it
             // changed without us asking.
             lastSeenEnginePID = status.ownedProcessID
@@ -218,7 +234,7 @@ private final class AgentRuntime {
                     audioSink: settings.audioSink,
                     lowLatency: settings.lowLatencyMode
                 )
-                _ = try await runtime.power.acquire(policy: settings.powerPolicy)
+                _ = try await runtime.power.acquire(policy: settings.powerPolicy.remoteStreamingPolicy)
                 try await runtime.sunshine.start()
                 logger.info("started remote work mode")
                 // Arm the supervision loop. From here on, an unexpected
@@ -226,6 +242,7 @@ private final class AgentRuntime {
                 remoteWorkActive = true
                 engineRestartAttempts.removeAll()
                 lastSeenEnginePID = nil
+                lastNetworkAddresses = nil
             } catch {
                 logger.error("failed to start remote work mode: \(error.localizedDescription)")
                 let report = await makeReport(
@@ -245,6 +262,7 @@ private final class AgentRuntime {
             remoteWorkActive = false
             engineRestartAttempts.removeAll()
             lastSeenEnginePID = nil
+            lastNetworkAddresses = nil
             do {
                 try await runtime.sunshine.stop()
                 logger.info("stopped remote work mode")
