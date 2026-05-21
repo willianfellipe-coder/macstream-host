@@ -325,7 +325,7 @@ public enum SecureLockReadiness: Equatable {
         case .needsAppPassword:
             return "Configure uma senha do MacStream antes de bloquear. Ela fica no Keychain e serve como fallback ao Touch ID / senha do macOS."
         case .noSafeDisplayDuringCapture:
-            return "Bloqueio seguro precisa de uma tela não capturada pelo Moonlight. Conecte outro display ou encerre a sessão antes de bloquear."
+            return "Bloqueio seguro em uma única tela exige Touch ID / senha do macOS ativo. Ative essa opção, conecte outro display ou encerre a sessão antes de bloquear."
         case .lockedOut(let secondsRemaining):
             return "Tentativas excedidas. Aguarde \(secondsRemaining) segundos antes de tentar novamente."
         }

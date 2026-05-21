@@ -35,11 +35,11 @@ public enum SecureLockError: Error, LocalizedError, Equatable {
     /// lock readiness normally returns `.needsAppPassword` first because
     /// the MacStream password is mandatory.
     case noAuthAvailable
-    /// Streaming is active and the host has only one display — the same
-    /// one Sunshine is capturing. There is no safe display to host the
-    /// password panel without leaking into the Moonlight feed. UI should
-    /// ask the user to disconnect Moonlight or plug in a second display
-    /// before locking.
+    /// Streaming is active and the host has only one display, but macOS
+    /// owner authentication is unavailable. There is no safe display to
+    /// host the MacStream password panel without leaking into Moonlight.
+    /// UI should ask the user to enable Touch ID / macOS password,
+    /// disconnect Moonlight, or plug in a second display before locking.
     case noSafeDisplayDuringStream
     /// The user is in the temporal lockout window after too many failed
     /// attempts. UI should display the wait time.
@@ -724,6 +724,10 @@ public final class AppState: ObservableObject {
             let streamed = displayInventory.streamedDisplayID()
             let safeDisplays = displays.filter { $0 != streamed }
             if safeDisplays.isEmpty {
+                if runtimeSettings.hostPrivacyPolicy.secureAllowMacOSAuthentication,
+                   localAuthenticationService.isAvailable() {
+                    return .ready
+                }
                 return .noSafeDisplayDuringCapture
             }
         }

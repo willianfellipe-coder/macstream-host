@@ -518,7 +518,29 @@ final class AppStateTests: XCTestCase {
     }
 
     @MainActor
-    func testSecureLockRefusesSingleDisplayWhenCaptureRiskIsActive() async {
+    func testSecureLockAllowsSingleDisplayWhenMacOSAuthenticationIsAvailable() async {
+        var settings = MacStreamHostSettings.defaults()
+        settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
+        let remote = MockRemoteWorkSessionManager()
+        remote.report.state = .running
+        let appState = makeTestAppState(
+            runtimeSettings: settings,
+            remoteWork: remote,
+            appPasswordStore: InMemoryAppPasswordStore(initial: "fallback"),
+            localAuthenticationService: MockLocalAuthenticationService(available: true),
+            displayInventory: MockDisplayInventoryProvider(displays: [1], streamed: 1)
+        )
+        await appState.refresh()
+
+        XCTAssertEqual(appState.secureLockReadiness(), .ready)
+
+        await appState.lockHostForPrivacy()
+
+        XCTAssertEqual(appState.privacyOverlayMode, .secure)
+    }
+
+    @MainActor
+    func testSecureLockRefusesSingleDisplayWhenMacOSAuthenticationIsUnavailable() async {
         var settings = MacStreamHostSettings.defaults()
         settings.hostPrivacyPolicy = HostPrivacyPolicy(mode: .secureOverlay)
         let remote = MockRemoteWorkSessionManager()
@@ -536,7 +558,7 @@ final class AppStateTests: XCTestCase {
         await appState.lockHostForPrivacy()
 
         XCTAssertEqual(appState.privacyOverlayMode, .none)
-        XCTAssertTrue(appState.lastOperationMessage?.contains("tela não capturada") ?? false)
+        XCTAssertTrue(appState.lastOperationMessage?.contains("Touch ID") ?? false)
     }
 
     @MainActor

@@ -18,6 +18,9 @@ All notable changes to MacStream Host will be documented here.
   leaks through ScreenCaptureKit. The streamed display now uses
   panel/backlight dimming with a watchdog, while non-streamed displays
   keep the full-screen shield and password panel.
+- Allowed secure lock on a single streamed display when Touch ID / macOS
+  password is available, using macOS authentication as the local unlock
+  path because no safe display exists for the MacStream password panel.
 
 ### Stop unauthorized Sunshine Web UI probes (2026-05-19)
 

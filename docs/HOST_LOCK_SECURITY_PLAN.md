@@ -52,7 +52,9 @@ or secure overlay.
   watchdog that reapplies dimming while secure lock is enabled.
 - Render the password panel only on a non-streamed physical display.
 - If capture risk exists and there is no non-streamed physical display,
-  refuse secure lock with a clear recovery message.
+  allow secure lock only when Touch ID / macOS password is available for
+  local unlock. Without that macOS auth path, refuse secure lock with a
+  clear recovery message.
 - Keep filtering synthetic Moonlight keyboard events from secure lock
   windows so the remote client cannot type into the local unlock panel.
 
@@ -85,14 +87,19 @@ Automated tests must cover:
 - Correct MacStream password unlocks secure overlay.
 - Wrong MacStream password increments attempts and enters temporal
   lockout at the configured threshold.
-- Secure overlay refuses a single-display capture-risk scenario.
+- Secure overlay allows a single-display capture-risk scenario when
+  Touch ID / macOS password is available.
+- Secure overlay refuses a single-display capture-risk scenario when
+  Touch ID / macOS password is unavailable.
 - Secure overlay allows a multi-display capture-risk scenario.
 - Classic dismiss paths do not unlock secure overlay.
 
 Manual QA must cover:
 
-- One physical display plus active Moonlight: secure lock is refused with
-  a clear message.
+- One physical display plus active Moonlight plus Touch ID / macOS
+  password: secure lock is allowed and unlock works through macOS auth.
+- One physical display plus active Moonlight without Touch ID / macOS
+  password: secure lock is refused with a clear message.
 - Two physical displays plus active Moonlight: the streamed display is
   dimmed with watchdog and no window; the safe display gets the overlay
   and password panel.

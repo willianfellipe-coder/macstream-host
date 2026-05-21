@@ -180,7 +180,8 @@ temporal (30s × tentativa extra, cap 5 min). Não é lockout permanente.
 
 | Situação | Comportamento |
 |---|---|
-| Único display + Sunshine/Moonlight ativo | Pre-flight rejeita: "Bloqueio seguro precisa de uma tela não capturada pelo Moonlight." Conecte outro display ou encerre a sessão antes de bloquear. |
+| Único display + Sunshine/Moonlight ativo + Touch ID/senha do macOS disponível | Bloqueia. A tela capturada usa brilho/backlight com watchdog e não recebe `NSWindow`; desbloqueio acontece por Touch ID/senha do macOS pelo botão "Desbloquear no Mac". |
+| Único display + Sunshine/Moonlight ativo + Touch ID/senha do macOS indisponível/desativado | Pre-flight rejeita. Sem uma tela segura para o painel MacStream, o app pede para ativar Touch ID/senha do macOS, conectar outro display ou encerrar a sessão antes de bloquear. |
 | Despluga um monitor durante o lock | O controlador observa `didChangeScreenParametersNotification` e reconstrói as janelas. Painel de senha migra para outra tela não capturada. |
 | Esqueceu a senha do MacStream | Use Touch ID / senha do macOS (se ativado). Recovery sem precisar reinstalar. |
 | Quer escapar pelo tray | Em modo seguro, o item de unlock do tray é desabilitado deliberadamente. Desbloqueio só pelo painel local. |
