@@ -27,8 +27,9 @@ final class PowerAndPrivacyManagerTests: XCTestCase {
 
         XCTAssertTrue(acquired.isActive)
         XCTAssertEqual(acquired.assertionID, 77)
-        XCTAssertEqual(provider.createdNames, ["MacStream Remote Work Mode"])
-        XCTAssertEqual(provider.releasedIDs, [77])
+        XCTAssertEqual(provider.createdNames, ["MacStream Remote Work Mode", "MacStream Remote Work Mode"])
+        XCTAssertEqual(provider.createdKeepDisplayAwake, [false, true])
+        XCTAssertEqual(provider.releasedIDs, [77, 78])
         XCTAssertFalse(released.isActive)
     }
 
@@ -57,11 +58,15 @@ final class PowerAndPrivacyManagerTests: XCTestCase {
 
 private final class FakePowerAssertionProvider: PowerAssertionProviding {
     var createdNames: [String] = []
+    var createdKeepDisplayAwake: [Bool] = []
     var releasedIDs: [UInt32] = []
+    private var nextID: UInt32 = 77
 
     func createAssertion(named name: String, keepDisplayAwake: Bool) throws -> UInt32 {
         createdNames.append(name)
-        return 77
+        createdKeepDisplayAwake.append(keepDisplayAwake)
+        defer { nextID += 1 }
+        return nextID
     }
 
     func releaseAssertion(id: UInt32) throws {

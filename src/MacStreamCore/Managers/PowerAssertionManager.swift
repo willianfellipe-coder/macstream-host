@@ -68,7 +68,8 @@ public final class SystemPowerAssertionProvider: PowerAssertionProviding {
 
 public final class DefaultPowerAssertionManager: PowerAssertionManaging {
     private let provider: PowerAssertionProviding
-    private var activeAssertionID: UInt32?
+    private var activeSystemAssertionID: UInt32?
+    private var activeDisplayAssertionID: UInt32?
     private var activePolicy: PowerPolicy
 
     public init(
@@ -80,7 +81,7 @@ public final class DefaultPowerAssertionManager: PowerAssertionManaging {
     }
 
     public func currentStatus() async -> PowerAssertionStatus {
-        guard let activeAssertionID else {
+        guard activeSystemAssertionID != nil || activeDisplayAssertionID != nil else {
             return PowerAssertionStatus(
                 isActive: false,
                 policy: activePolicy,
@@ -91,7 +92,7 @@ public final class DefaultPowerAssertionManager: PowerAssertionManaging {
         return PowerAssertionStatus(
             isActive: true,
             policy: activePolicy,
-            assertionID: activeAssertionID,
+            assertionID: activeSystemAssertionID ?? activeDisplayAssertionID,
             detail: activePolicy.keepDisplayAwake
                 ? "MacStream esta impedindo sleep do sistema e do display."
                 : "MacStream esta impedindo sleep do sistema durante o modo remoto."
@@ -105,10 +106,34 @@ public final class DefaultPowerAssertionManager: PowerAssertionManaging {
             return try await release()
         }
 
-        if activeAssertionID == nil {
-            activeAssertionID = try provider.createAssertion(
+        if policy.preventSystemSleep {
+            if activeSystemAssertionID == nil {
+                activeSystemAssertionID = try provider.createAssertion(
+                    named: "MacStream Remote Work Mode",
+                    keepDisplayAwake: false
+                )
+            }
+        } else if let activeSystemAssertionID {
+            try provider.releaseAssertion(id: activeSystemAssertionID)
+            self.activeSystemAssertionID = nil
+        }
+
+        if policy.keepDisplayAwake {
+            if activeDisplayAssertionID == nil {
+                activeDisplayAssertionID = try provider.createAssertion(
+                    named: "MacStream Remote Work Mode",
+                    keepDisplayAwake: true
+                )
+            }
+        } else if let activeDisplayAssertionID {
+            try provider.releaseAssertion(id: activeDisplayAssertionID)
+            self.activeDisplayAssertionID = nil
+        }
+
+        if activeSystemAssertionID == nil && activeDisplayAssertionID == nil {
+            activeSystemAssertionID = try provider.createAssertion(
                 named: "MacStream Remote Work Mode",
-                keepDisplayAwake: policy.keepDisplayAwake
+                keepDisplayAwake: false
             )
         }
 
@@ -116,9 +141,13 @@ public final class DefaultPowerAssertionManager: PowerAssertionManaging {
     }
 
     public func release() async throws -> PowerAssertionStatus {
-        if let activeAssertionID {
-            try provider.releaseAssertion(id: activeAssertionID)
-            self.activeAssertionID = nil
+        if let activeSystemAssertionID {
+            try provider.releaseAssertion(id: activeSystemAssertionID)
+            self.activeSystemAssertionID = nil
+        }
+        if let activeDisplayAssertionID {
+            try provider.releaseAssertion(id: activeDisplayAssertionID)
+            self.activeDisplayAssertionID = nil
         }
 
         return await currentStatus()
