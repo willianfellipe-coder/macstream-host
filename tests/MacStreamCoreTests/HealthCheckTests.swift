@@ -154,6 +154,42 @@ final class HealthCheckTests: XCTestCase {
         XCTAssertEqual(runtimeCheck?.status, .pass)
     }
 
+    func testHealthCheckIgnoresStaleStderrCrashAfterSuccessfulStartup() async {
+        let service = DefaultHealthCheckService(
+            sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),
+            blackHoleManager: MockBlackHoleManager(status: .installed),
+            permissionManager: MockPermissionManager(permissionsStatus: MacOSPermissionsStatus(checks: [
+                PermissionCheck(id: .screenRecording, status: .granted, detail: "OK"),
+                PermissionCheck(id: .microphone, status: .granted, detail: "OK"),
+                PermissionCheck(id: .localNetwork, status: .granted, detail: "OK")
+            ])),
+            audioDeviceManager: MockAudioDeviceManager(),
+            networkDiagnosticsManager: MockNetworkDiagnosticsManager(),
+            launchAgentManager: MockLaunchAgentManager(status: .loaded),
+            logManager: MockLogManager(entries: [
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Sunshine version: 2026.516.143833 commit: abc"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Detected display: Built-in Retina Display (id: 1) connected: true"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Configuring selected display (1) to stream"),
+                LogEntry(subsystem: "Sunshine stdout", message: "Info: Found H.264 encoder: h264_videotoolbox [videotoolbox]"),
+                LogEntry(
+                    subsystem: "Sunshine stderr",
+                    message: "*** Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '*** -[__NSPlaceholderDictionary initWithObjects:forKeys:count:]: attempt to insert nil object from objects[2]'"
+                ),
+                LogEntry(
+                    subsystem: "Sunshine stderr",
+                    message: "4   Sunshine                            0x000000010268322c +[AVVideo displayNames] + 308"
+                )
+            ])
+        )
+
+        let result = await service.runHealthCheck()
+        let runtimeCheck = result.checks.first { $0.id == .sunshineRuntime }
+        let screenCheck = result.checks.first { $0.id == .sunshineScreenRecording }
+
+        XCTAssertEqual(runtimeCheck?.status, .pass)
+        XCTAssertNil(screenCheck)
+    }
+
     func testHealthCheckDoesNotFailAudioWhenBlackHoleDriverIsInstalled() async {
         let service = DefaultHealthCheckService(
             sunshineManager: MockSunshineManager(currentStatus: SunshineStatus(state: .running, webUIReachable: true)),

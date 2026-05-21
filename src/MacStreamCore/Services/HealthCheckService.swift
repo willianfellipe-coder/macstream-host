@@ -237,7 +237,9 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
         // 14.5+/Sequoia the API now returns nil silently and Sunshine reports
         // an encoder-startup failure instead. Both shapes mean the same thing:
         // the embedded video engine has no permission to capture the screen.
-        if detectsScreenRecordingTccFailure(joined) {
+        if detectsScreenRecordingTccFailure(joined)
+            && hasSuccessfulScreenCaptureStartup(joined) == false
+        {
             return HealthCheck(
                 id: .sunshineScreenRecording,
                 title: "Permissão de Gravação de Tela",
@@ -301,6 +303,16 @@ public final class DefaultHealthCheckService: HealthCheckServicing {
             || hasDisplayNamesFrame
             || hasNoDisplayDuringStartup
             || hasFailedEncoderProbe
+    }
+
+    private func hasSuccessfulScreenCaptureStartup(_ joined: String) -> Bool {
+        let detectedDisplay = joined.contains("detected display:")
+        let configuredDisplay = joined.contains("configuring selected display")
+        let foundEncoder =
+            joined.contains("found h.264 encoder:")
+                || joined.contains("found hevc encoder:")
+                || joined.contains("found av1 encoder:")
+        return detectedDisplay && configuredDisplay && foundEncoder
     }
 
     private func messagesFromCurrentSunshineStartup(_ messages: [String]) -> [String] {
